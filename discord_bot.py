@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN
 # ------------------------------
 
-TOKEN = "TU_DISCORD_BOT_TOKEN_AQUI"  # Reemplaza esto con la variable de entorno si quieres
-CHANNEL_ID = 123456789012345678  # Pega aquí el ID de tu canal
+TOKEN = "5a0f6f21c7c60a457a5080bdf33c89991dd0d2fd2215a786e3612328138141a4"  # Reemplaza esto con la variable de entorno si quieres
+CHANNEL_ID = 1479194534410981436  # Pega aquí el ID de tu canal
 
 CHECK_INTERVAL = 60  # segundos entre chequeos de bounties
 
@@ -71,4 +71,5 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
+
 
