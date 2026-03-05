@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: merc-tool-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn --worker-class aiohttp.worker.GunicornWebWorker 'main:init_app()'"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: merc-tool-db
+          property: connectionString
+
+databases:
+  - name: merc-tool-db
+    plan: free

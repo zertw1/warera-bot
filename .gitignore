@@ -1,0 +1,15 @@
+# Config
+config.json
+
+# Database
+users.db
+battle_state.db
+
+# Python
+__pycache__/
+*.pyc
+.env
+.venv
+*.key
+*.pub
+

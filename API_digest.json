@@ -1,0 +1,260 @@
+{
+	"api_name": "WarEra tRPC API",
+	"base_protocol": "GET (Note: ignores openapi.json POST specification)",
+	"base_url": "https://api2.warera.io/trpc",
+	"common_response_wrapper": {
+		"result": {
+			"data": "any"
+		}
+	},
+	"endpoints": {
+		"company": {
+			"getById": {
+				"params": {
+					"companyId": "string (required)"
+				},
+				"response_data": {
+					"_id": "string",
+					"name": "string",
+					"user": "string (user_id)",
+					"region": "string (region_id)",
+					"itemCode": "string",
+					"production": "number",
+					"activeUpgradeLevels": "object {storage, automatedEngine, breakRoom}",
+					"estimatedValue": "number"
+				}
+			},
+			"getCompanies": {
+				"params": {
+					"userId": "string (optional)",
+					"orgId": "string (optional)",
+					"perPage": "number (1-100, default: 10)",
+					"cursor": "string (optional)"
+				},
+				"response_data": {
+					"items": "array of strings (company_ids)",
+					"nextCursor": "string"
+				}
+			}
+		},
+		"country": {
+			"getCountryById": {
+				"params": {
+					"countryId": "string (required)"
+				},
+				"response_data": {
+					"_id": "string",
+					"name": "string",
+					"code": "string (iso)",
+					"money": "number",
+					"taxes": "object {income, market, selfWork}",
+					"allies": "array of strings (country_ids)",
+					"warsWith": "array of strings (country_ids)",
+					"rankings": "object"
+				}
+			},
+			"getAllCountries": {
+				"params": {},
+				"response_data": "array of country objects"
+			}
+		},
+		"event": {
+			"getEventsPaginated": {
+				"params": {
+					"limit": "number (default: 10)",
+					"cursor": "string",
+					"countryId": "string",
+					"eventTypes": "array"
+				},
+				"response_data": {
+					"items": "array of objects {_id, countries, priority, data: {type, ...}}",
+					"nextCursor": "string"
+				}
+			}
+		},
+		"government": {
+			"getByCountryId": {
+				"params": {
+					"countryId": "string"
+				},
+				"response_data": {
+					"president": "string",
+					"vicePresident": "string",
+					"congressMembers": "array of strings"
+				}
+			}
+		},
+		"region": {
+			"getById": {
+				"params": {
+					"regionId": "string"
+				},
+				"response_data": {
+					"_id": "string",
+					"name": "string",
+					"country": "string",
+					"isCapital": "boolean",
+					"neighbors": "array of strings",
+					"strategicResource": "string"
+				}
+			},
+			"getRegionsObject": {
+				"params": {},
+				"response_data": "object { [region_id]: region_object }"
+			}
+		},
+		"battle": {
+			"getById": {
+				"params": {
+					"battleId": "string"
+				},
+				"response_data": {
+					"_id": "string",
+					"attacker": "object {region, country, damages, hitCount}",
+					"defender": "object {region, country, damages, hitCount}",
+					"isActive": "boolean",
+					"currentRound": "string (round_id)"
+				}
+			},
+			"getLiveBattleData": {
+				"params": {
+					"battleId": "string",
+					"roundNumber": "number"
+				},
+				"response_data": {
+					"battle": "object {isActive, roundIds, ...}",
+					"round": "object {attackerDamages, defenderDamages, points, nextTickAt, ...}"
+				}
+			},
+			"getBattles": {
+				"params": {
+					"isActive": "boolean",
+					"limit": "number",
+					"cursor": "string",
+					"filter": "all|yourCountry|yourEnemies"
+				},
+				"response_data": {
+					"items": "array of battle objects",
+					"nextCursor": "string"
+				}
+			}
+		},
+		"round": {
+			"getById": {
+				"params": {
+					"roundId": "string"
+				},
+				"response_data": {
+					"attacker": "object",
+					"defender": "object",
+					"live": "object"
+				}
+			},
+			"getLastHits": {
+				"params": {
+					"roundId": "string"
+				},
+				"response_data": {
+					"attacker": "array of hits",
+					"defender": "array of hits"
+				}
+			}
+		},
+		"battleRanking": {
+			"getRanking": {
+				"params": {
+					"dataType": "damage|points|money",
+					"type": "user|country",
+					"side": "attacker|defender"
+				},
+				"response_data": {
+					"rankings": "array of {_id, user, value, rank, lootChance}"
+				}
+			}
+		},
+		"itemTrading": {
+			"getPrices": {
+				"params": {},
+				"response_data": "object { [itemCode]: price_number }"
+			}
+		},
+		"tradingOrder": {
+			"getTopOrders": {
+				"params": {
+					"itemCode": "string",
+					"limit": "number"
+				},
+				"response_data": {
+					"buyOrders": "array",
+					"sellOrders": "array"
+				}
+			}
+		},
+		"workOffer": {
+			"getWorkOffersPaginated": {
+				"params": {
+					"regionId": "string",
+					"cursor": "string",
+					"limit": "number"
+				},
+				"response_data": {
+					"items": "array of work_offer objects",
+					"nextCursor": "string"
+				}
+			}
+		},
+		"user": {
+			"getUserLite": {
+				"params": {
+					"userId": "string"
+				},
+				"response_data": {
+					"_id": "string",
+					"username": "string",
+					"leveling": "object",
+					"skills": "object",
+					"stats": "object"
+				}
+			},
+			"getUsersByCountry": {
+				"params": {
+					"countryId": "string"
+				},
+				"response_data": {
+					"items": "array of {_id, createdAt}"
+				}
+			}
+		},
+		"article": {
+			"getArticlesPaginated": {
+				"params": {
+					"type": "string",
+					"limit": "number",
+					"cursor": "string"
+				},
+				"response_data": {
+					"items": "array of article objects",
+					"nextCursor": "string"
+				}
+			}
+		},
+		"mu": {
+			"getManyPaginated": {
+				"params": {
+					"limit": "number",
+					"cursor": "string"
+				},
+				"response_data": {
+					"items": "array of mu objects",
+					"nextCursor": "string"
+				}
+			}
+		},
+		"gameConfig": {
+			"getGameConfig": {
+				"params": {},
+				"response_data": "large object {user, skills, items, upgradesConfig, ...}"
+			}
+		}
+	}
+}

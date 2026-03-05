@@ -1,0 +1,6 @@
+python-telegram-bot[job-queue]
+discord.py
+asyncpg
+httpx
+gunicorn
+aiohttp
