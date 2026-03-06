@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 def load_config():
     """Loads the configuration from environment variables or config.json."""
     config = {}
-    config["telegram_bot_token"] = os.getenv("8793147335:AAFeugzoGRE0E9EtCh-YDkaLCF5J3qPD9k4")
-    config["discord_bot_token"] = os.getenv("DISCORD_BOT_TOKEN")
+    config["telegram_bot_token"] = "8793147335:AAFeugzoGRE0E9EtCh-YDkaLCF5J3qPD9k4"
+    config["discord_bot_token"] = "DISCORD_BOT_TOKEN"
 
     if not config["telegram_bot_token"]:
         try:
@@ -245,6 +245,7 @@ def init_app():
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
     return app
+
 
 
 
