@@ -1,47 +1,40 @@
 import os
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, webhook
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
+# Tu token tal como lo definiste en Render
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # ------------------------------
-# CONFIG
-# ------------------------------
-TOKEN = os.environ["TELEGRAM_TOKEN"]  # variable de entorno en Render
-PORT = int(os.environ.get("PORT", 10000))
-APP_URL = os.environ.get("APP_URL", "https://TU_APP.onrender.com")  # la URL de tu web service
-
-# ------------------------------
-# HANDLERS
+# Handlers de comandos
 # ------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot activado!")
+    await update.message.reply_text("Bot iniciado!")
 
 async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("¡Cazando!")
+    await update.message.reply_text("Hunt ejecutado!")
 
 async def threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Threshold ajustado.")
+    await update.message.reply_text("Threshold actualizado!")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Estado del bot: OK")
+    await update.message.reply_text("Estado del bot OK!")
 
 # ------------------------------
-# MAIN
+# Función principal
 # ------------------------------
 def main():
-    app = Application.builder().token(TOKEN).build()
-
-    # registrar handlers
+    # Crear aplicación del bot
+    app = ApplicationBuilder().token(TOKEN).build()
+    
+    # Agregar handlers de comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("hunt", hunt))
     app.add_handler(CommandHandler("threshold", threshold))
     app.add_handler(CommandHandler("status", status))
 
-    # iniciar webhook
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=f"{APP_URL}/{TOKEN}"
-    )
+    # Ejecutar el bot usando polling (no webhook, evita conflictos en Render)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
