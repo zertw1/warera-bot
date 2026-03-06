@@ -21,14 +21,14 @@ def load_config():
     """Loads the configuration from environment variables or config.json."""
     config = {}
     config["telegram_bot_token"] = os.getenv("TELEGRAM_BOT_TOKEN")
-    config["discord_bot_token"] = "6774d4046fbc5fe5664a12ab7001732e64cfadd108a40a971d45316f32a49656"
+    config["discord_bot_token"] = "MTQ3OTIyOTgzNDM0MDMzOTcxMg.GbQwjN.KY3_JH7SArtbkEl5JDQqW-2g6cJwvr2pOl4Ldo"
 
     if not config["telegram_bot_token"]:
         try:
             with open("config.json", "r") as f:
                 json_config = json.load(f)
                 config["telegram_bot_token"] = json_config.get("telegram_bot_token")
-                config["discord_bot_token"] = "6774d4046fbc5fe5664a12ab7001732e64cfadd108a40a971d45316f32a49656"
+                config["discord_bot_token"] = "MTQ3OTIyOTgzNDM0MDMzOTcxMg.GbQwjN.KY3_JH7SArtbkEl5JDQqW-2g6cJwvr2pOl4Ldo"
         except FileNotFoundError:
             logger.error("config.json not found. Set TELEGRAM_BOT_TOKEN and DISCORD_BOT_TOKEN environment variables.")
             return None
@@ -245,5 +245,6 @@ def init_app():
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
     return app
+
 
 
