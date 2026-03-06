@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 def load_config():
     return {
         "telegram_bot_token": "TU_TOKEN_TELEGRAM_AQUI",
-        "discord_bot_token": "6774d4046fbc5fe5664a12ab7001732e64cfadd108a40a971d45316f32a49656"
+        "discord_bot_token": "MTQ3OTIyOTgzNDM0MDMzOTcxMg.GbQwjN.KY3_JH7SArtbkEl5JDQqW-2g6cJwvr2pOl4Ldo"
     }
 
 # ----------------------
@@ -272,3 +272,4 @@ def init_app():
 # ----------------------
 if __name__ == "__main__":
     web.run_app(init_app(), port=8080)
+
