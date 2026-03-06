@@ -1,5 +1,4 @@
 import os
-import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -32,7 +31,6 @@ async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Hunt realizada! Total de hunts: {bot_state['hunts_done']}")
 
 async def threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Si el usuario envía un argumento, lo tomamos como nuevo threshold
     if context.args:
         try:
             new_value = int(context.args[0])
@@ -52,17 +50,17 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------------------
 # Inicialización del Bot
 # ------------------------------
-async def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Registrar comandos
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("hunt", hunt))
-    app.add_handler(CommandHandler("threshold", threshold))
-    app.add_handler(CommandHandler("status", status))
+# Registrar comandos
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("hunt", hunt))
+app.add_handler(CommandHandler("threshold", threshold))
+app.add_handler(CommandHandler("status", status))
 
-    print("Bot iniciado. Esperando comandos...")
-    await app.run_polling()
-
+# ------------------------------
+# Ejecutar polling (Render ya maneja el loop)
+# ------------------------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("Bot iniciado. Esperando comandos...")
+    app.run_polling()
