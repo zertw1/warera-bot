@@ -1,14 +1,15 @@
 import json
 import asyncio
 import logging
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import database as db
 import shared_logic as shared
 import discord_bot
 import httpx
-import os
 from aiohttp import web
+import telegram
 
 # Configure logging
 logging.basicConfig(
@@ -17,8 +18,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------- Config Loader ----------------
 def load_config():
-    """Loads the configuration from environment variables or config.json."""
     config = {}
     config["telegram_bot_token"] = os.getenv("TELEGRAM_BOT_TOKEN")
     config["discord_bot_token"] = os.getenv("DISCORD_BOT_TOKEN")
@@ -38,6 +39,7 @@ def load_config():
     
     return config
 
+# ---------------- Telegram Handlers ----------------
 async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     pool = context.bot_data["db_pool"]
@@ -100,7 +102,6 @@ async def run_tg_immediate_check(chat_id, context: ContextTypes.DEFAULT_TYPE):
         if not battles: return
         
         battle_ids = [b.get("_id") for b in battles if b.get("_id")]
-        # Fetch states for these battles
         states = await db.get_battle_states(pool, battle_ids)
 
         batch_results = await shared.get_live_battle_data_batched(client, battle_ids[:10])
@@ -112,6 +113,7 @@ async def run_tg_immediate_check(chat_id, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=n['user_id'], text=n['message'], parse_mode="Markdown")
             await db.update_battle_state(pool, n['user_id'], n['platform'], n['battle_id'], n['side_name'], n['ratio'], n['pool'])
 
+# ---------------- Broadcast for Discord & Telegram ----------------
 async def broadcast_notifications(app, notifications):
     pool = app['db_pool']
     for n in notifications:
@@ -122,12 +124,11 @@ async def broadcast_notifications(app, notifications):
                 discord_user = await app['discord_bot_client'].fetch_user(int(n['user_id']))
                 if discord_user:
                     await discord_user.send(n['message'].replace("*", "**"))
-            
-            # Update state in DB
             await db.update_battle_state(pool, n['user_id'], n['platform'], n['battle_id'], n['side_name'], n['ratio'], n['pool'])
         except Exception as e:
             logger.error(f"Failed to send {n['platform']} message to {n['user_id']}: {e}")
 
+# ---------------- Battle Checker Job ----------------
 async def battle_checker_job(app):
     async with httpx.AsyncClient() as client:
         app['httpx_client'] = client
@@ -144,7 +145,6 @@ async def battle_checker_job(app):
                     battle_ids = [b.get("_id") for b in battles if b.get("_id")]
                     await db.clear_old_battles(pool, battle_ids)
                     
-                    # Fetch everything needed for logic
                     users = await db.get_all_active_users(pool)
                     states = await db.get_battle_states(pool, battle_ids)
                     
@@ -157,25 +157,29 @@ async def battle_checker_job(app):
                             all_live_data.extend(zip(current_batch_ids, batch_results))
                             await asyncio.sleep(0.2)
 
-                        # Pure logic check (CPU bound, fast)
                         notifications = shared.check_battles_for_users(users, all_live_data, states)
-                        
-                        # Send notifications & update DB (IO bound)
                         await broadcast_notifications(app, notifications)
             except Exception as e:
                 logger.error(f"Error in battle checker job: {e}")
             await asyncio.sleep(20)
 
+# ---------------- Health Check ----------------
 async def health(request):
-    # Optional: Check DB connectivity here
     return web.Response(text="OK")
 
+# ---------------- Telegram Webhook ----------------
+async def tg_webhook(request):
+    data = await request.json()
+    update = telegram.Update.de_json(data, request.app['tg_app'].bot)
+    await request.app['tg_app'].update_queue.put(update)
+    return web.Response(text="OK")
+
+# ---------------- Startup & Cleanup ----------------
 async def start_background_tasks(app):
     config = load_config()
     if not config:
         return
 
-    # Initialize DB Pool
     try:
         pool = await db.get_pool()
         app['db_pool'] = pool
@@ -185,34 +189,27 @@ async def start_background_tasks(app):
         return
 
     tg_token = config.get("telegram_bot_token")
-    if not tg_token:
-        logger.error("telegram_bot_token not found")
-        return
+    if tg_token:
+        tg_application = ApplicationBuilder().token(tg_token).build()
+        tg_application.bot_data["db_pool"] = pool
+        tg_application.add_handler(CommandHandler("start", tg_start))
+        tg_application.add_handler(CommandHandler("threshold", tg_set_threshold))
+        tg_application.add_handler(CommandHandler("minpool", tg_set_minpool))
+        tg_application.add_handler(CommandHandler("status", tg_status))
+        tg_application.add_handler(CommandHandler("stop", tg_stop))
         
-    tg_application = ApplicationBuilder().token(tg_token).build()
-    # Pass pool to Telegram context
-    tg_application.bot_data["db_pool"] = pool
-    
-    tg_application.add_handler(CommandHandler("start", tg_start))
-    tg_application.add_handler(CommandHandler("threshold", tg_set_threshold))
-    tg_application.add_handler(CommandHandler("minpool", tg_set_minpool))
-    tg_application.add_handler(CommandHandler("status", tg_status))
-    tg_application.add_handler(CommandHandler("stop", tg_stop))
-
-    app['tg_app'] = tg_application
+        WEBHOOK_URL = f"https://merc-tool-bot-up4g.onrender.com/tg_webhook"
+        await tg_application.bot.set_webhook(WEBHOOK_URL)
+        app['tg_app'] = tg_application
+    else:
+        logger.warning("telegram_bot_token not found")
 
     discord_token = config.get("discord_bot_token")
     if discord_token:
         discord_bot_client = discord_bot.get_bot()
-        discord_bot_client.db_pool = pool  # Inject pool into Discord bot
+        discord_bot_client.db_pool = pool
         app['discord_bot_client'] = discord_bot_client
         app['discord_task'] = asyncio.create_task(discord_bot.start_discord_bot(discord_token))
-    else:
-        logger.warning("discord_bot_token not found, Discord bot will not start.")
-
-    await tg_application.initialize()
-    await tg_application.start()
-    await tg_application.updater.start_polling()
 
     app['battle_checker'] = asyncio.create_task(battle_checker_job(app))
 
@@ -232,16 +229,16 @@ async def cleanup_background_tasks(app):
             pass
             
     if 'tg_app' in app:
-        await app['tg_app'].updater.stop()
         await app['tg_app'].stop()
         
     if 'db_pool' in app:
         await app['db_pool'].close()
 
-
+# ---------------- Init App ----------------
 def init_app():
     app = web.Application()
     app.router.add_get("/health", health)
+    app.router.add_post("/tg_webhook", tg_webhook)
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
     return app
