@@ -1,12 +1,13 @@
 import os
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, webhook
 
 # ------------------------------
-# CONFIGURACIÓN
+# CONFIG
 # ------------------------------
-TOKEN = os.environ["TELEGRAM_TOKEN"]  # asegurate de poner tu token en Render como variable de entorno
-PORT = int(os.environ.get("PORT", 10000))  # Render asigna un puerto automáticamente
+TOKEN = os.environ["TELEGRAM_TOKEN"]  # variable de entorno en Render
+PORT = int(os.environ.get("PORT", 10000))
+APP_URL = os.environ.get("APP_URL", "https://TU_APP.onrender.com")  # la URL de tu web service
 
 # ------------------------------
 # HANDLERS
@@ -24,22 +25,22 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Estado del bot: OK")
 
 # ------------------------------
-# APLICACIÓN
+# MAIN
 # ------------------------------
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
-    # Registrar handlers
+    # registrar handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("hunt", hunt))
     app.add_handler(CommandHandler("threshold", threshold))
     app.add_handler(CommandHandler("status", status))
 
-    # Ejecutar con webhook en Render
+    # iniciar webhook
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=f"https://TU_APP.onrender.com/{TOKEN}"
+        webhook_url=f"{APP_URL}/{TOKEN}"
     )
 
 if __name__ == "__main__":
