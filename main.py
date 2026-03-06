@@ -4,94 +4,82 @@ import os
 
 from aiohttp import web
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# logging
+# -------- Logging --------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-
 logger = logging.getLogger(__name__)
 
-
-# -------- TELEGRAM COMMANDS --------
+# -------- Telegram Commands --------
 
 async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Bot activo correctamente.\nUsa /status para comprobar estado."
     )
 
-
 async def tg_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot funcionando correctamente.")
 
-
 async def tg_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot detenido.")
+    await update.message.reply_text("Bot detenido temporalmente.")
 
 
-# -------- HEALTHCHECK --------
+# -------- Healthcheck Endpoint --------
 
 async def health(request):
     return web.Response(text="OK")
 
 
-# -------- BACKGROUND TASK --------
+# -------- Background Task --------
 
 async def background_job(app):
     while True:
-        logger.info("Background job running...")
+        logger.info("Background job ejecutándose...")
         await asyncio.sleep(20)
 
 
-# -------- STARTUP --------
+# -------- Startup --------
 
 async def start_background_tasks(app):
-
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-
     if not telegram_token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN no está configurado")
 
-    tg_application = ApplicationBuilder().token(telegram_token).build()
+    tg_app = ApplicationBuilder().token(telegram_token).build()
 
-    tg_application.add_handler(CommandHandler("start", tg_start))
-    tg_application.add_handler(CommandHandler("status", tg_status))
-    tg_application.add_handler(CommandHandler("stop", tg_stop))
+    tg_app.add_handler(CommandHandler("start", tg_start))
+    tg_app.add_handler(CommandHandler("status", tg_status))
+    tg_app.add_handler(CommandHandler("stop", tg_stop))
 
-    await tg_application.initialize()
-    await tg_application.start()
+    await tg_app.initialize()
+    await tg_app.start()
+    await tg_app.bot.initialize()
+    await tg_app.bot.delete_webhook(drop_pending_updates=True)
 
-    # polling
-    await tg_application.bot.initialize()
-    await tg_application.bot.delete_webhook(drop_pending_updates=True)
-
-    app["tg_app"] = tg_application
-
-    # background worker
+    app["tg_app"] = tg_app
     app["worker"] = asyncio.create_task(background_job(app))
 
 
-# -------- CLEANUP --------
+# -------- Cleanup --------
 
 async def cleanup_background_tasks(app):
-
     if "worker" in app:
         app["worker"].cancel()
+        try:
+            await app["worker"]
+        except asyncio.CancelledError:
+            pass
 
     if "tg_app" in app:
         await app["tg_app"].stop()
 
 
-# -------- APP FACTORY --------
+# -------- App Factory --------
 
 def init_app():
-
     app = web.Application()
 
     app.router.add_get("/health", health)
@@ -100,6 +88,7 @@ def init_app():
     app.on_cleanup.append(cleanup_background_tasks)
 
     return app
+
 
 
 
