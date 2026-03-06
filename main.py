@@ -1,52 +1,46 @@
-# main.py
-from telegram import Update, Bot
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import os
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# -----------------------------
+# ------------------------------
 # CONFIGURACIÓN
-# -----------------------------
-TOKEN = os.environ.get("TELEGRAM_TOKEN", "TU_TOKEN_AQUI")
+# ------------------------------
+TOKEN = os.environ["TELEGRAM_TOKEN"]  # asegurate de poner tu token en Render como variable de entorno
+PORT = int(os.environ.get("PORT", 10000))  # Render asigna un puerto automáticamente
 
-# Eliminar webhook activo para evitar conflictos con polling
-bot = Bot(TOKEN)
-bot.delete_webhook()
-
-# -----------------------------
+# ------------------------------
 # HANDLERS
-# -----------------------------
-
+# ------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hola! Bot activado. Usa /hunt, /threshold o /status.")
+    await update.message.reply_text("Bot activado!")
 
 async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Aquí va la lógica de tu "cazar"
-    await update.message.reply_text("Hunting... 🏹")
+    await update.message.reply_text("¡Cazando!")
 
 async def threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Aquí va la lógica de tu "umbral"
-    await update.message.reply_text("Threshold ajustado!")
+    await update.message.reply_text("Threshold ajustado.")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Aquí va la lógica de tu "estado"
-    await update.message.reply_text("Estado actual: todo en orden ✅")
+    await update.message.reply_text("Estado del bot: OK")
 
-# -----------------------------
-# MAIN
-# -----------------------------
+# ------------------------------
+# APLICACIÓN
+# ------------------------------
 def main():
-    # Crear la app
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Registrar comandos
+    # Registrar handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("hunt", hunt))
     app.add_handler(CommandHandler("threshold", threshold))
     app.add_handler(CommandHandler("status", status))
 
-    # Iniciar polling
-    print("Bot iniciado...")
-    app.run_polling()
+    # Ejecutar con webhook en Render
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=f"https://TU_APP.onrender.com/{TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
