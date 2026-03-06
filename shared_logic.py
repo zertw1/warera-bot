@@ -4,11 +4,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Base URL for the WarEra API
 BASE_URL = "https://api2.warera.io/trpc"
 
-async def get_active_battles(client):
-    """Gets all active battles from the WarEra API."""
+async def get_active_battles(client: httpx.AsyncClient):
+    """Obtiene todas las batallas activas de la API de WarEra"""
     try:
         params = {"input": json.dumps({"isActive": True})}
         response = await client.get(f"{BASE_URL}/battle.getBattles", params=params)
@@ -16,19 +15,18 @@ async def get_active_battles(client):
         data = response.json()
         return data.get("result", {}).get("data", {}).get("items", [])
     except Exception as e:
-        logger.error(f"Error getting active battles: {e}")
-        return None
+        logger.error(f"Error obteniendo batallas activas: {e}")
+        return []
 
-async def get_live_battle_data_batched(client, battle_ids):
-    """Gets live data for multiple battles in a single batched request."""
+async def get_live_battle_data_batched(client: httpx.AsyncClient, battle_ids):
+    """Obtiene datos en vivo de varias batallas en un request batched"""
     if not battle_ids:
         return []
-    
     try:
         endpoints = ",".join(["battle.getLiveBattleData"] * len(battle_ids))
         inputs = {str(i): {"battleId": bid} for i, bid in enumerate(battle_ids)}
         params = {"batch": 1, "input": json.dumps(inputs)}
-        
+
         response = await client.get(f"{BASE_URL}/{endpoints}", params=params)
         response.raise_for_status()
         batch_data = response.json()
@@ -38,19 +36,12 @@ async def get_live_battle_data_batched(client, battle_ids):
             results.append(item.get("result", {}).get("data", {}))
         return results
     except Exception as e:
-        logger.error(f"Error getting batched live battle data: {e}")
+        logger.error(f"Error obteniendo batallas en vivo batched: {e}")
         return []
 
 def check_battles_for_users(users, all_live_data, battle_states):
     """
-    Processes live battle data against a list of users.
-    Args:
-        users: List of user dicts.
-        all_live_data: List of (battle_id, live_data) tuples.
-        battle_states: Dict mapping (user_id, platform, battle_id, side) -> {money_per_1k, money_pool}
-        
-    Returns:
-        notifications: List of notification dicts.
+    Procesa los datos de batallas en vivo y genera notificaciones para usuarios
     """
     notifications = []
     for user in users:
@@ -60,7 +51,8 @@ def check_battles_for_users(users, all_live_data, battle_states):
         min_pool = user['min_pool']
 
         for battle_id, live_data in all_live_data:
-            if not live_data: continue
+            if not live_data: 
+                continue
             
             battle_obj = live_data.get("battle", {})
             sides = [
@@ -70,11 +62,9 @@ def check_battles_for_users(users, all_live_data, battle_states):
 
             for side_name, ratio, pool in sides:
                 if ratio >= threshold and pool >= min_pool:
-                    # Check if we already notified for this state
                     state_key = (user_id, platform, battle_id, side_name)
                     prev_state = battle_states.get(state_key)
                     
-                    # Logic: Notify if first time, OR if ratio changed, OR if pool increased
                     should_notify = False
                     if prev_state is None:
                         should_notify = True
