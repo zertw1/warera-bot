@@ -1,194 +1,211 @@
 import os
+import logging
 import requests
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
+# ------------------------------
+# CONFIG
+# ------------------------------
+
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# ----------------------------
-# CONFIG
-# ----------------------------
+BATTLES_API = "https://api2.warera.io/trpc/battle.getBattles?input=%7B%22isActive%22%3Atrue%7D"
 
-API_URL = "https://api.war-era.com/leaderboard"
-PRO_THRESHOLD = 500000
-DEFAULT_MIN = 0
-DEFAULT_MAX = 10000000000
+CHECK_INTERVAL = 60
 
-# ----------------------------
-# BOUNTY DETECTION
-# ----------------------------
+threshold = 0.5
+seen_players = set()
 
-def calculate_bounty(player):
-    bounty = player.get("bounty", 0)
+# ------------------------------
+# LOGGING
+# ------------------------------
 
-    # fallback por bug común del API
-    if bounty == 0:
-        kills = player.get("kills", 0)
-        deaths = player.get("deaths", 1)
-        bounty = kills * 10000 - deaths * 5000
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
-    if bounty < 0:
-        bounty = 0
+# ------------------------------
+# API
+# ------------------------------
 
-    return bounty
-
-# ----------------------------
-# FETCH DATA
-# ----------------------------
-
-def get_players():
+def get_active_battles():
 
     try:
-        r = requests.get(API_URL, timeout=10)
+
+        r = requests.get(BATTLES_API, timeout=10)
+
+        if r.status_code != 200:
+            return []
+
         data = r.json()
-        return data.get("players", [])
-    except:
+
+        if "result" in data:
+            return data["result"]["data"]["json"]
+
         return []
 
-# ----------------------------
+    except Exception as e:
+        print("API error:", e)
+        return []
+
+# ------------------------------
+# SCANNER
+# ------------------------------
+
+async def scanner(context: ContextTypes.DEFAULT_TYPE):
+
+    global threshold
+
+    battles = get_active_battles()
+
+    for battle in battles:
+
+        players = battle.get("players", [])
+
+        for player in players:
+
+            name = player.get("username", "Unknown")
+            bounty = float(player.get("bounty", 0))
+
+            if bounty >= threshold:
+
+                key = f"{name}-{bounty}"
+
+                if key not in seen_players:
+
+                    seen_players.add(key)
+
+                    message = (
+                        f"🎯 BOUNTY DETECTADO\n\n"
+                        f"Jugador: {name}\n"
+                        f"Bounty: {bounty}"
+                    )
+
+                    await context.bot.send_message(
+                        chat_id=context.job.chat_id,
+                        text=message
+                    )
+
+# ------------------------------
 # COMMANDS
-# ----------------------------
+# ------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
-        "🤖 Bounty Hunter Bot PRO\n\n"
+        "🤖 WarEra Bounty Bot PRO\n\n"
+        "Comandos:\n"
         "/hunt min max\n"
-        "ejemplo:\n"
-        "/hunt 500000 2000000"
+        "/threshold x\n"
+        "/ping"
     )
 
-# ----------------------------
+    context.job_queue.run_repeating(
+        scanner,
+        interval=CHECK_INTERVAL,
+        first=10,
+        chat_id=update.effective_chat.id
+    )
+
+
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text("🏓 Bot activo")
+
 
 async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    players = get_players()
+    if len(context.args) != 2:
 
-    if not players:
-        await update.message.reply_text("⚠️ No se pudo obtener la data")
+        await update.message.reply_text(
+            "Uso:\n/hunt 0.5 2"
+        )
         return
 
-    # rango por defecto
-    min_bounty = DEFAULT_MIN
-    max_bounty = DEFAULT_MAX
+    try:
 
-    if len(context.args) == 2:
-        try:
-            min_bounty = int(float(context.args[0]) * 1000000)
-            max_bounty = int(float(context.args[1]) * 1000000)
-        except:
-            pass
+        min_b = float(context.args[0])
+        max_b = float(context.args[1])
 
-    targets = []
+    except:
 
-    for p in players:
-
-        bounty = calculate_bounty(p)
-
-        if min_bounty <= bounty <= max_bounty:
-
-            targets.append({
-                "name": p.get("name","Unknown"),
-                "bounty": bounty,
-                "server": p.get("server","?")
-            })
-
-    if not targets:
-        await update.message.reply_text("❌ No hay objetivos en ese rango")
+        await update.message.reply_text("Valores inválidos")
         return
 
-    targets.sort(key=lambda x: x["bounty"], reverse=True)
+    battles = get_active_battles()
 
-    msg = "🎯 Targets encontrados\n\n"
+    encontrados = []
 
-    for t in targets[:10]:
+    for battle in battles:
 
-        bounty_m = round(t["bounty"]/1000000,2)
+        players = battle.get("players", [])
 
-        msg += f"{t['name']} — {bounty_m}M — {t['server']}\n"
+        for player in players:
+
+            name = player.get("username", "Unknown")
+            bounty = float(player.get("bounty", 0))
+
+            if min_b <= bounty <= max_b:
+
+                encontrados.append(f"{name} — {bounty}")
+
+    if not encontrados:
+
+        await update.message.reply_text("No hay bounties en ese rango")
+        return
+
+    msg = "🎯 Bounties encontrados\n\n"
+
+    for p in encontrados[:30]:
+        msg += p + "\n"
 
     await update.message.reply_text(msg)
 
-# ----------------------------
-# PRO SCANNER
-# ----------------------------
 
-async def pro_scan(context: ContextTypes.DEFAULT_TYPE):
+async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    players = get_players()
+    global threshold
 
-    if not players:
+    if len(context.args) != 1:
+
+        await update.message.reply_text("/threshold 0.5")
         return
 
-    targets = []
+    try:
 
-    for p in players:
+        threshold = float(context.args[0])
 
-        bounty = calculate_bounty(p)
+        await update.message.reply_text(
+            f"Nuevo mínimo automático: {threshold}"
+        )
 
-        if bounty >= PRO_THRESHOLD:
+    except:
 
-            targets.append({
-                "name": p.get("name","Unknown"),
-                "bounty": bounty,
-                "server": p.get("server","?")
-            })
+        await update.message.reply_text("Valor inválido")
 
-    if not targets:
-        return
-
-    targets.sort(key=lambda x: x["bounty"], reverse=True)
-
-    msg = "🚨 PRO BOUNTY DETECTED\n\n"
-
-    for t in targets[:5]:
-
-        bounty_m = round(t["bounty"]/1000000,2)
-
-        msg += f"{t['name']} — {bounty_m}M — {t['server']}\n"
-
-    for chat_id in context.bot_data.get("subscribers", []):
-        try:
-            await context.bot.send_message(chat_id=chat_id, text=msg)
-        except:
-            pass
-
-# ----------------------------
-# SUBSCRIBE
-# ----------------------------
-
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    chat_id = update.effective_chat.id
-
-    if "subscribers" not in context.bot_data:
-        context.bot_data["subscribers"] = []
-
-    if chat_id not in context.bot_data["subscribers"]:
-        context.bot_data["subscribers"].append(chat_id)
-
-    await update.message.reply_text("✅ Activado PRO scanner")
-
-# ----------------------------
+# ------------------------------
 # MAIN
-# ----------------------------
+# ------------------------------
 
 def main():
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("hunt", hunt))
-    app.add_handler(CommandHandler("subscribe", subscribe))
+    app.add_handler(CommandHandler("threshold", set_threshold))
 
-    job_queue = app.job_queue
-    job_queue.run_repeating(pro_scan, interval=60, first=10)
-
-    print("BOT RUNNING")
+    print("Bot iniciado")
 
     app.run_polling()
 
-# ----------------------------
 
 if __name__ == "__main__":
+
     main()
+
 
