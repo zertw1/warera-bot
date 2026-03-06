@@ -1,19 +1,20 @@
 import logging
 import asyncio
+import os
 import requests
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ------------------------------
-# CONFIGURACIÓN
+# CONFIG
 # ------------------------------
 
-TOKEN = "TU_TOKEN_AQUI"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 API_URL = "https://api-warera.vercel.app/players"
 
-CHECK_INTERVAL = 120  # segundos
+CHECK_INTERVAL = 120
 
 # ------------------------------
 # VARIABLES
@@ -27,21 +28,22 @@ seen_players = set()
 # ------------------------------
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
 # ------------------------------
-# FUNCIONES
+# API
 # ------------------------------
 
 def get_players():
 
     try:
+
         r = requests.get(API_URL, timeout=10)
 
         if r.status_code != 200:
-            print("API error:", r.status_code)
+            logging.error(f"API error {r.status_code}")
             return []
 
         data = r.json()
@@ -55,7 +57,8 @@ def get_players():
         return []
 
     except Exception as e:
-        print("Error consultando API:", e)
+
+        logging.error(f"API request failed: {e}")
         return []
 
 
@@ -64,15 +67,13 @@ def parse_bounty(player):
     bounty = player.get("bounty", 0)
 
     try:
-        bounty = float(bounty)
+        return float(bounty)
     except:
-        bounty = 0
-
-    return bounty
+        return 0
 
 
 # ------------------------------
-# ESCÁNER AUTOMÁTICO
+# SCANNER
 # ------------------------------
 
 async def scanner(context: ContextTypes.DEFAULT_TYPE):
@@ -100,10 +101,16 @@ async def scanner(context: ContextTypes.DEFAULT_TYPE):
                     f"Bounty: {bounty}"
                 )
 
-                await context.bot.send_message(
-                    chat_id=context.job.chat_id,
-                    text=message
-                )
+                try:
+
+                    await context.bot.send_message(
+                        chat_id=context.job.chat_id,
+                        text=message
+                    )
+
+                except Exception as e:
+
+                    logging.error(f"Telegram send error: {e}")
 
 
 # ------------------------------
@@ -113,10 +120,12 @@ async def scanner(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "🤖 Bot de bounties iniciado.\n\n"
+        "🤖 Bot WarEra PRO iniciado\n\n"
         "Comandos:\n"
         "/hunt MIN MAX\n"
         "/threshold X\n"
+        "/top\n"
+        "/scan\n"
         "/ping"
     )
 
@@ -134,7 +143,23 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ------------------------------
-# HUNT POR RANGO
+# SCAN MANUAL
+# ------------------------------
+
+async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    players = get_players()
+
+    total = len(players)
+
+    await update.message.reply_text(
+        f"🔎 Escaneo manual completado\n\n"
+        f"Jugadores analizados: {total}"
+    )
+
+
+# ------------------------------
+# HUNT
 # ------------------------------
 
 async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -142,10 +167,9 @@ async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 2:
 
         await update.message.reply_text(
-            "Uso correcto:\n"
-            "/hunt MIN MAX\n\n"
+            "Uso:\n/hunt MIN MAX\n\n"
             "Ejemplo:\n"
-            "/hunt 0.5 1.5"
+            "/hunt 0.5 2"
         )
         return
 
@@ -170,23 +194,54 @@ async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if min_bounty <= bounty <= max_bounty:
 
-            encontrados.append(f"{name} — {bounty}")
+            encontrados.append((name, bounty))
 
     if not encontrados:
 
         await update.message.reply_text("No hay bounties en ese rango.")
         return
 
+    encontrados.sort(key=lambda x: x[1], reverse=True)
+
     msg = "🎯 Bounties encontrados:\n\n"
 
-    for p in encontrados[:30]:
-        msg += p + "\n"
+    for name, bounty in encontrados[:30]:
+
+        msg += f"{name} — {bounty}\n"
 
     await update.message.reply_text(msg)
 
 
 # ------------------------------
-# CAMBIAR THRESHOLD
+# TOP BOUNTIES
+# ------------------------------
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    players = get_players()
+
+    lista = []
+
+    for player in players:
+
+        name = player.get("name", "Unknown")
+        bounty = parse_bounty(player)
+
+        lista.append((name, bounty))
+
+    lista.sort(key=lambda x: x[1], reverse=True)
+
+    msg = "🏆 Top bounties:\n\n"
+
+    for name, bounty in lista[:15]:
+
+        msg += f"{name} — {bounty}\n"
+
+    await update.message.reply_text(msg)
+
+
+# ------------------------------
+# THRESHOLD
 # ------------------------------
 
 async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -195,9 +250,7 @@ async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) != 1:
 
-        await update.message.reply_text(
-            "Uso:\n/threshold 0.5"
-        )
+        await update.message.reply_text("Uso:\n/threshold 0.5")
         return
 
     try:
@@ -219,16 +272,23 @@ async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
 
+    if not TOKEN:
+
+        print("ERROR: TELEGRAM_BOT_TOKEN no configurado")
+        return
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("hunt", hunt))
     app.add_handler(CommandHandler("threshold", set_threshold))
+    app.add_handler(CommandHandler("top", top))
+    app.add_handler(CommandHandler("scan", scan))
 
     await app.bot.delete_webhook(drop_pending_updates=True)
 
-    print("Bot iniciado correctamente")
+    print("Bot WarEra PRO iniciado")
 
     await app.run_polling()
 
@@ -238,5 +298,4 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
-
 
