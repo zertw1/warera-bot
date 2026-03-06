@@ -135,6 +135,3 @@ async def start_discord_bot(token):
         await bot.start(token)
     except Exception as e:
         logger.error(f"Failed to start Discord bot: {e}")
-
-
-
