@@ -1,37 +1,42 @@
-import os
 import logging
 import requests
+import os
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
 
-# ------------------------------
+# -----------------------------
 # CONFIG
-# ------------------------------
+# -----------------------------
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 BATTLES_API = "https://api2.warera.io/trpc/battle.getBattles?input=%7B%22isActive%22%3Atrue%7D"
+LIVE_API = "https://api2.warera.io/trpc/battle.getLiveBattleData"
 
-CHECK_INTERVAL = 60
+SCAN_INTERVAL = 120
 
 threshold = 0.5
 seen_players = set()
 
-# ------------------------------
-# LOGGING
-# ------------------------------
+# -----------------------------
+# LOGS
+# -----------------------------
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# ------------------------------
+# -----------------------------
 # API
-# ------------------------------
+# -----------------------------
 
-def get_active_battles():
+def get_battles():
 
     try:
 
@@ -42,33 +47,49 @@ def get_active_battles():
 
         data = r.json()
 
-        if "result" in data:
-            return data["result"]["data"]["json"]
+        battles = data["result"]["data"]["json"]
 
-        return []
+        return battles
 
     except Exception as e:
+
         print("API error:", e)
         return []
 
-# ------------------------------
+# -----------------------------
+# PARSE BOUNTY
+# -----------------------------
+
+def parse_bounty(player):
+
+    try:
+
+        bounty = float(player.get("bounty", 0))
+
+    except:
+
+        bounty = 0
+
+    return bounty
+
+# -----------------------------
 # SCANNER
-# ------------------------------
+# -----------------------------
 
 async def scanner(context: ContextTypes.DEFAULT_TYPE):
 
     global threshold
 
-    battles = get_active_battles()
+    battles = get_battles()
 
     for battle in battles:
 
         players = battle.get("players", [])
 
-        for player in players:
+        for p in players:
 
-            name = player.get("username", "Unknown")
-            bounty = float(player.get("bounty", 0))
+            name = p.get("name", "Unknown")
+            bounty = parse_bounty(p)
 
             if bounty >= threshold:
 
@@ -78,50 +99,58 @@ async def scanner(context: ContextTypes.DEFAULT_TYPE):
 
                     seen_players.add(key)
 
-                    message = (
-                        f"🎯 BOUNTY DETECTADO\n\n"
+                    msg = (
+                        "🎯 Bounty detectado\n\n"
                         f"Jugador: {name}\n"
                         f"Bounty: {bounty}"
                     )
 
                     await context.bot.send_message(
                         chat_id=context.job.chat_id,
-                        text=message
+                        text=msg
                     )
 
-# ------------------------------
-# COMMANDS
-# ------------------------------
+# -----------------------------
+# START
+# -----------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🤖 WarEra Bounty Bot PRO\n\n"
         "Comandos:\n"
-        "/hunt min max\n"
-        "/threshold x\n"
+        "/hunt MIN MAX\n"
+        "/threshold X\n"
+        "/top\n"
+        "/live\n"
         "/ping"
     )
 
     context.job_queue.run_repeating(
         scanner,
-        interval=CHECK_INTERVAL,
+        interval=SCAN_INTERVAL,
         first=10,
         chat_id=update.effective_chat.id
     )
 
+# -----------------------------
+# PING
+# -----------------------------
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    await update.message.reply_text("🏓 Bot activo")
+    await update.message.reply_text("🏓 Pong")
 
+# -----------------------------
+# HUNT
+# -----------------------------
 
 async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) != 2:
 
         await update.message.reply_text(
-            "Uso:\n/hunt 0.5 2"
+            "Uso:\n/hunt MIN MAX\n\nEjemplo:\n/hunt 0.5 2"
         )
         return
 
@@ -135,35 +164,38 @@ async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Valores inválidos")
         return
 
-    battles = get_active_battles()
+    battles = get_battles()
 
-    encontrados = []
+    results = []
 
     for battle in battles:
 
         players = battle.get("players", [])
 
-        for player in players:
+        for p in players:
 
-            name = player.get("username", "Unknown")
-            bounty = float(player.get("bounty", 0))
+            name = p.get("name")
+            bounty = parse_bounty(p)
 
             if min_b <= bounty <= max_b:
 
-                encontrados.append(f"{name} — {bounty}")
+                results.append(f"{name} — {bounty}")
 
-    if not encontrados:
+    if not results:
 
         await update.message.reply_text("No hay bounties en ese rango")
         return
 
     msg = "🎯 Bounties encontrados\n\n"
 
-    for p in encontrados[:30]:
-        msg += p + "\n"
+    for r in results[:30]:
+        msg += r + "\n"
 
     await update.message.reply_text(msg)
 
+# -----------------------------
+# THRESHOLD
+# -----------------------------
 
 async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -171,7 +203,9 @@ async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) != 1:
 
-        await update.message.reply_text("/threshold 0.5")
+        await update.message.reply_text(
+            "Uso:\n/threshold 0.5"
+        )
         return
 
     try:
@@ -186,9 +220,72 @@ async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("Valor inválido")
 
-# ------------------------------
+# -----------------------------
+# TOP BOUNTIES
+# -----------------------------
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    battles = get_battles()
+
+    players = []
+
+    for battle in battles:
+
+        for p in battle.get("players", []):
+
+            name = p.get("name")
+            bounty = parse_bounty(p)
+
+            players.append((name, bounty))
+
+    players.sort(key=lambda x: x[1], reverse=True)
+
+    msg = "🏆 Top Bounties\n\n"
+
+    for name, bounty in players[:10]:
+
+        msg += f"{name} — {bounty}\n"
+
+    await update.message.reply_text(msg)
+
+# -----------------------------
+# LIVE PLAYERS
+# -----------------------------
+
+async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    battles = get_battles()
+
+    msg = "⚔️ Jugadores peleando ahora\n\n"
+
+    count = 0
+
+    for battle in battles:
+
+        players = battle.get("players", [])
+
+        for p in players:
+
+            name = p.get("name")
+            bounty = parse_bounty(p)
+
+            msg += f"{name} — {bounty}\n"
+            count += 1
+
+            if count > 20:
+                break
+
+    if count == 0:
+
+        await update.message.reply_text("No hay batallas activas")
+        return
+
+    await update.message.reply_text(msg)
+
+# -----------------------------
 # MAIN
-# ------------------------------
+# -----------------------------
 
 def main():
 
@@ -198,14 +295,18 @@ def main():
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("hunt", hunt))
     app.add_handler(CommandHandler("threshold", set_threshold))
+    app.add_handler(CommandHandler("top", top))
+    app.add_handler(CommandHandler("live", live))
 
     print("Bot iniciado")
 
     app.run_polling()
 
+# -----------------------------
 
 if __name__ == "__main__":
 
     main()
+
 
 
