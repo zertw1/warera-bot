@@ -1,5 +1,3 @@
 python-telegram-bot==20.3
-# otras librerías que uses, si hay
-httpx==0.27.0
-
+httpx~=0.24.0
 
