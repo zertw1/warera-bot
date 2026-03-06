@@ -160,6 +160,10 @@ async def battle_checker_job(app):
 async def health(request):
     return web.Response(text="OK")
 
+# ---------------- Root for browser ----------------
+async def root(request):
+    return web.Response(text="Bot running! ✅")
+
 # ---------------- Telegram Webhook ----------------
 async def tg_webhook(request):
     data = await request.json()
@@ -173,12 +177,10 @@ async def start_background_tasks(app):
     if not config:
         return
 
-    # Initialize DB
     pool = await db.get_pool()
     app['db_pool'] = pool
     await db.init_db(pool)
 
-    # Telegram bot
     tg_token = config.get("telegram_bot_token")
     if tg_token:
         tg_application = ApplicationBuilder().token(tg_token).build()
@@ -192,7 +194,6 @@ async def start_background_tasks(app):
         await tg_application.bot.set_webhook(WEBHOOK_URL)
         app['tg_app'] = tg_application
 
-    # Discord bot
     discord_token = config.get("discord_bot_token")
     if discord_token:
         discord_bot_client = discord_bot.get_bot()
@@ -200,7 +201,6 @@ async def start_background_tasks(app):
         app['discord_bot_client'] = discord_bot_client
         app['discord_task'] = asyncio.create_task(discord_bot.start_discord_bot(discord_token))
 
-    # Battle checker
     app['battle_checker'] = asyncio.create_task(battle_checker_job(app))
 
 # ---------------- Cleanup ----------------
@@ -225,6 +225,7 @@ async def cleanup_background_tasks(app):
 # ---------------- Init App ----------------
 def init_app():
     app = web.Application()
+    app.router.add_get("/", root)  # <-- raíz para navegador
     app.router.add_get("/health", health)
     app.router.add_post("/tg_webhook", tg_webhook)
     app.on_startup.append(start_background_tasks)
