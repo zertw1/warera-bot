@@ -4,3 +4,5 @@ asyncpg
 httpx
 gunicorn
 aiohttp
+requests
+
