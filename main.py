@@ -1,6 +1,6 @@
 import os
-import asyncio
 import logging
+import asyncio
 import requests
 
 from telegram import Update
@@ -10,9 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 # CONFIGURACIÓN
 # ------------------------------
 
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-if not TOKEN:
-    raise RuntimeError("La variable de entorno TELEGRAM_BOT_TOKEN no está definida")
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")  # Ahora se toma desde la variable de entorno
 
 API_URL = "https://api-warera.vercel.app/players"
 CHECK_INTERVAL = 120  # segundos
@@ -69,15 +67,24 @@ def parse_bounty(player):
 async def scanner(context: ContextTypes.DEFAULT_TYPE):
     global threshold
     players = get_players()
+
     for player in players:
         name = player.get("name", "Unknown")
         bounty = parse_bounty(player)
+
         if bounty >= threshold:
             key = f"{name}-{bounty}"
             if key not in seen_players:
                 seen_players.add(key)
-                message = f"🎯 Bounty detectado\n\nJugador: {name}\nBounty: {bounty}"
-                await context.bot.send_message(chat_id=context.job.chat_id, text=message)
+                message = (
+                    f"🎯 Bounty detectado\n\n"
+                    f"Jugador: {name}\n"
+                    f"Bounty: {bounty}"
+                )
+                await context.bot.send_message(
+                    chat_id=context.job.chat_id,
+                    text=message
+                )
 
 # ------------------------------
 # COMANDOS
@@ -91,20 +98,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/threshold X\n"
         "/ping"
     )
-    context.job_queue.run_repeating(scanner, interval=CHECK_INTERVAL, first=10, chat_id=update.effective_chat.id)
+    context.job_queue.run_repeating(
+        scanner,
+        interval=CHECK_INTERVAL,
+        first=10,
+        chat_id=update.effective_chat.id
+    )
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏓 Pong! Bot activo.")
 
-# ------------------------------
-# HUNT POR RANGO
-# ------------------------------
-
 async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 2:
-        await update.message.reply_text("Uso correcto:\n/hunt MIN MAX\nEjemplo: /hunt 0.5 1.5")
+        await update.message.reply_text(
+            "Uso correcto:\n"
+            "/hunt MIN MAX\n\n"
+            "Ejemplo:\n"
+            "/hunt 0.5 1.5"
+        )
         return
-
     try:
         min_bounty = float(context.args[0])
         max_bounty = float(context.args[1])
@@ -113,19 +125,23 @@ async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     players = get_players()
-    encontrados = [f"{p.get('name','Unknown')} — {parse_bounty(p)}"
-                   for p in players if min_bounty <= parse_bounty(p) <= max_bounty]
+    encontrados = []
+
+    for player in players:
+        name = player.get("name", "Unknown")
+        bounty = parse_bounty(player)
+        if min_bounty <= bounty <= max_bounty:
+            encontrados.append(f"{name} — {bounty}")
 
     if not encontrados:
         await update.message.reply_text("No hay bounties en ese rango.")
         return
 
-    msg = "🎯 Bounties encontrados:\n\n" + "\n".join(encontrados[:30])
-    await update.message.reply_text(msg)
+    msg = "🎯 Bounties encontrados:\n\n"
+    for p in encontrados[:30]:
+        msg += p + "\n"
 
-# ------------------------------
-# CAMBIAR THRESHOLD
-# ------------------------------
+    await update.message.reply_text(msg)
 
 async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global threshold
@@ -142,20 +158,31 @@ async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ------------------------------
 
-def main():
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("hunt", hunt))
     app.add_handler(CommandHandler("threshold", set_threshold))
 
+    # Borra webhook previo si existe
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print("No se pudo eliminar webhook:", e)
+
     print("Bot iniciado correctamente")
-    app.run_polling()
+    await app.run_polling()
 
 # ------------------------------
 
 if __name__ == "__main__":
-    main()
+    # Evita error de loop corriendo en algunos entornos
+    import nest_asyncio
+    nest_asyncio.apply()
+    asyncio.run(main())
+
 
 
 
