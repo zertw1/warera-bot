@@ -1,290 +1,242 @@
-import discord
-from discord import app_commands
-from discord.ext import commands
-import database as db
-import shared_logic as shared
 import logging
 import asyncio
+import requests
 
-logger = logging.getLogger(__name__)
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-class DiscordBot(commands.Bot):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(command_prefix="!", intents=intents)
-        self.httpx_client = None
-        self.db_pool = None
+# ------------------------------
+# CONFIGURACIÓN
+# ------------------------------
 
-    async def setup_hook(self):
-        await self.tree.sync()
-        logger.info("Slash commands synced globally.")
+TOKEN = "TU_TOKEN_AQUI"
 
-bot = DiscordBot()
+API_URL = "https://api-warera.vercel.app/players"
 
-def get_bot():
-    return bot
+CHECK_INTERVAL = 120  # segundos
+
+# ------------------------------
+# VARIABLES
+# ------------------------------
+
+threshold = 0.5
+seen_players = set()
+
+# ------------------------------
+# LOGS
+# ------------------------------
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+# ------------------------------
+# FUNCIONES
+# ------------------------------
+
+def get_players():
+
+    try:
+        r = requests.get(API_URL, timeout=10)
+
+        if r.status_code != 200:
+            print("API error:", r.status_code)
+            return []
+
+        data = r.json()
+
+        if isinstance(data, list):
+            return data
+
+        if isinstance(data, dict):
+            return data.get("players", [])
+
+        return []
+
+    except Exception as e:
+        print("Error consultando API:", e)
+        return []
 
 
-async def run_immediate_check(user_id):
+def parse_bounty(player):
 
-    pool = bot.db_pool
+    bounty = player.get("bounty", 0)
 
-    if not pool:
-        logger.error("DB Pool not initialized in Discord Bot")
-        return
+    try:
+        bounty = float(bounty)
+    except:
+        bounty = 0
 
-    user = await db.get_user(pool, user_id, 'discord')
+    return bounty
 
-    if not user or not user['active'] or not bot.httpx_client:
-        return
 
-    battles = await shared.get_active_battles(bot.httpx_client)
+# ------------------------------
+# ESCÁNER AUTOMÁTICO
+# ------------------------------
 
-    if not battles:
-        return
+async def scanner(context: ContextTypes.DEFAULT_TYPE):
 
-    battle_ids = [b.get("_id") for b in battles if b.get("_id")]
+    global threshold
 
-    states = await db.get_battle_states(pool, battle_ids)
+    players = get_players()
 
-    # ---------- CORRECCIÓN: revisar TODAS las battles ----------
-    chunk_size = 20
-    all_live_data = []
+    for player in players:
 
-    for i in range(0, len(battle_ids), chunk_size):
-        chunk = battle_ids[i:i+chunk_size]
+        name = player.get("name", "Unknown")
+        bounty = parse_bounty(player)
 
-        batch_results = await shared.get_live_battle_data_batched(
-            bot.httpx_client,
-            chunk
-        )
+        if bounty >= threshold:
 
-        all_live_data.extend(zip(chunk, batch_results))
+            key = f"{name}-{bounty}"
 
-        await asyncio.sleep(0.15)
-    # -----------------------------------------------------------
+            if key not in seen_players:
 
-    user_list = [{
-        "user_id": user_id,
-        "platform": 'discord',
-        "threshold": user['threshold'],
-        "min_pool": user['min_pool']
-    }]
+                seen_players.add(key)
 
-    notifications = shared.check_battles_for_users(
-        user_list,
-        all_live_data,
-        states
+                message = (
+                    f"🎯 Bounty detectado\n\n"
+                    f"Jugador: {name}\n"
+                    f"Bounty: {bounty}"
+                )
+
+                await context.bot.send_message(
+                    chat_id=context.job.chat_id,
+                    text=message
+                )
+
+
+# ------------------------------
+# COMANDOS
+# ------------------------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text(
+        "🤖 Bot de bounties iniciado.\n\n"
+        "Comandos:\n"
+        "/hunt MIN MAX\n"
+        "/threshold X\n"
+        "/ping"
     )
+
+    context.job_queue.run_repeating(
+        scanner,
+        interval=CHECK_INTERVAL,
+        first=10,
+        chat_id=update.effective_chat.id
+    )
+
+
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text("🏓 Pong! Bot activo.")
+
+
+# ------------------------------
+# HUNT POR RANGO
+# ------------------------------
+
+async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) != 2:
+
+        await update.message.reply_text(
+            "Uso correcto:\n"
+            "/hunt MIN MAX\n\n"
+            "Ejemplo:\n"
+            "/hunt 0.5 1.5"
+        )
+        return
 
     try:
 
-        discord_user = await bot.fetch_user(int(user_id))
+        min_bounty = float(context.args[0])
+        max_bounty = float(context.args[1])
 
-        if discord_user:
+    except:
 
-            for n in notifications:
+        await update.message.reply_text("Valores inválidos.")
+        return
 
-                await discord_user.send(
-                    n['message'].replace("*", "**")
-                )
+    players = get_players()
 
-                await db.update_battle_state(
-                    pool,
-                    n['user_id'],
-                    n['platform'],
-                    n['battle_id'],
-                    n['side_name'],
-                    n['ratio'],
-                    n['pool']
-                )
+    encontrados = []
 
-    except Exception as e:
-        logger.error(f"Error in immediate check for {user_id}: {e}")
+    for player in players:
 
+        name = player.get("name", "Unknown")
+        bounty = parse_bounty(player)
 
-@bot.event
-async def on_ready():
-    logger.info(f'Discord bot logged in as {bot.user.name}')
+        if min_bounty <= bounty <= max_bounty:
 
+            encontrados.append(f"{name} — {bounty}")
 
-@bot.tree.command(
-    name="start",
-    description="Register and start receiving battle notifications"
-)
-async def start(interaction: discord.Interaction):
+    if not encontrados:
 
-    user_id = str(interaction.user.id)
-    pool = interaction.client.db_pool
+        await update.message.reply_text("No hay bounties en ese rango.")
+        return
 
-    await db.update_user(pool, user_id, 'discord', active=1)
+    msg = "🎯 Bounties encontrados:\n\n"
 
-    user = await db.get_user(pool, user_id, 'discord')
+    for p in encontrados[:30]:
+        msg += p + "\n"
 
-    welcome_text = (
-        "👋 Welcome to the WarEra Battle Checker Bot!\n\n"
-        "I will notify you when profitable battles are found based on your settings.\n\n"
-        f"Current Settings:\n"
-        f"💰 Threshold: {user['threshold']} money/1k damage\n"
-        f"🏦 Min Pool: {user['min_pool']} money\n\n"
-        "Commands:\n"
-        "/threshold - Set your bounty threshold\n"
-        "/minpool - Set minimum money pool\n"
-        "/status - View your current settings\n"
-        "/stop - Stop receiving notifications"
-    )
-
-    await interaction.response.send_message(
-        welcome_text,
-        ephemeral=True
-    )
+    await update.message.reply_text(msg)
 
 
-@bot.tree.command(
-    name="threshold",
-    description="Set your bounty threshold (money per 1k damage)"
-)
-@app_commands.describe(
-    value="Value between 0 and 2 (e.g. 0.8)"
-)
-async def set_threshold(
-    interaction: discord.Interaction,
-    value: float
-):
+# ------------------------------
+# CAMBIAR THRESHOLD
+# ------------------------------
 
-    user_id = str(interaction.user.id)
-    pool = interaction.client.db_pool
+async def set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    if 0 < value <= 2:
+    global threshold
 
-        await db.update_user(
-            pool,
-            user_id,
-            'discord',
-            threshold=value
+    if len(context.args) != 1:
+
+        await update.message.reply_text(
+            "Uso:\n/threshold 0.5"
         )
-
-        await interaction.response.send_message(
-            f"✅ Threshold updated to {value}. Checking for battles...",
-            ephemeral=True
-        )
-
-        asyncio.create_task(
-            run_immediate_check(user_id)
-        )
-
-    else:
-
-        await interaction.response.send_message(
-            "❌ Value must be between 0 and 2.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(
-    name="minpool",
-    description="Set minimum money pool"
-)
-@app_commands.describe(
-    value="Value between 10 and 200"
-)
-async def set_minpool(
-    interaction: discord.Interaction,
-    value: float
-):
-
-    user_id = str(interaction.user.id)
-    pool = interaction.client.db_pool
-
-    if 10 <= value <= 200:
-
-        await db.update_user(
-            pool,
-            user_id,
-            'discord',
-            min_pool=value
-        )
-
-        await interaction.response.send_message(
-            f"✅ Minimum pool updated to {value}. Checking for battles...",
-            ephemeral=True
-        )
-
-        asyncio.create_task(
-            run_immediate_check(user_id)
-        )
-
-    else:
-
-        await interaction.response.send_message(
-            "❌ Value must be between 10 and 200.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(
-    name="status",
-    description="View your current settings"
-)
-async def status(interaction: discord.Interaction):
-
-    user_id = str(interaction.user.id)
-    pool = interaction.client.db_pool
-
-    user = await db.get_user(pool, user_id, 'discord')
-
-    if user:
-
-        status_text = (
-            "📊 Your Settings:\n"
-            f"💰 Threshold: {user['threshold']}\n"
-            f"🏦 Min Pool: {user['min_pool']}\n"
-            f"🔔 Notifications: {'Enabled' if user['active'] else 'Disabled'}"
-        )
-
-        await interaction.response.send_message(
-            status_text,
-            ephemeral=True
-        )
-
-    else:
-
-        await interaction.response.send_message(
-            "You are not registered. Use /start to begin.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(
-    name="stop",
-    description="Stop receiving notifications"
-)
-async def stop(interaction: discord.Interaction):
-
-    user_id = str(interaction.user.id)
-    pool = interaction.client.db_pool
-
-    await db.update_user(
-        pool,
-        user_id,
-        'discord',
-        active=0
-    )
-
-    await interaction.response.send_message(
-        "🚫 Notifications stopped. Use /start to resume.",
-        ephemeral=True
-    )
-
-
-async def start_discord_bot(token):
+        return
 
     try:
 
-        await bot.start(token)
+        threshold = float(context.args[0])
 
-    except Exception as e:
+        await update.message.reply_text(
+            f"Nuevo mínimo automático: {threshold}"
+        )
 
-        logger.error(f"Failed to start Discord bot: {e}")
+    except:
+
+        await update.message.reply_text("Valor inválido.")
+
+
+# ------------------------------
+# MAIN
+# ------------------------------
+
+async def main():
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ping", ping))
+    app.add_handler(CommandHandler("hunt", hunt))
+    app.add_handler(CommandHandler("threshold", set_threshold))
+
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
+    print("Bot iniciado correctamente")
+
+    await app.run_polling()
+
+
+# ------------------------------
+
+if __name__ == "__main__":
+
+    asyncio.run(main())
+
 
