@@ -7,7 +7,11 @@ from telegram.ext import Application, CommandHandler
 
 from database import init_db, get_db_pool
 from commands import start, help_command, set_threshold, set_min_pool
-from shared_logic import get_active_battles, get_live_battle_data_batched, check_battles_for_users
+from shared_logic import (
+    get_active_battles,
+    get_live_battle_data_batched,
+    check_battles_for_users,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,27 +51,26 @@ async def battle_checker(app):
                 notifications = check_battles_for_users(
                     users,
                     battle_data,
-                    battle_states
+                    battle_states,
                 )
 
                 for notif in notifications:
-
-                    await app["bot"].bot.send_message(
+                    await app["telegram_app"].bot.send_message(
                         chat_id=notif["user_id"],
                         text=notif["message"],
-                        parse_mode="Markdown"
+                        parse_mode="Markdown",
                     )
 
                     state_key = (
                         notif["user_id"],
                         notif["platform"],
                         notif["battle_id"],
-                        notif["side_name"]
+                        notif["side_name"],
                     )
 
                     battle_states[state_key] = {
                         "money_per_1k": notif["ratio"],
-                        "money_pool": notif["pool"]
+                        "money_pool": notif["pool"],
                     }
 
                 await asyncio.sleep(30)
@@ -106,7 +109,7 @@ async def init_app():
 
     app = web.Application()
 
-    app["bot"] = telegram_app
+    app["telegram_app"] = telegram_app
 
     app.router.add_get("/health", health)
 
