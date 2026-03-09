@@ -1,4 +1,5 @@
 # main.py
+import os
 import logging
 import asyncio
 from aiohttp import web
@@ -18,12 +19,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------------------
-# Configuración
+# Configuración desde variables de entorno
 # ------------------------------
-TELEGRAM_BOT_TOKEN = "8793147335:AAFeugzoGREOE9EtCh-YDkaLCF5J3qPD9k4"
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+WEBHOOK_DOMAIN = "https://merc-tool-bot-up4g.onrender.com"
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = "https://merc-tool-bot-up4g.onrender.com/" + WEBHOOK_PATH  # <- reemplaza TU_APP.onrender.com
-
+WEBHOOK_URL = WEBHOOK_DOMAIN + WEBHOOK_PATH
 
 # ------------------------------
 # Handlers
@@ -34,7 +35,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(update.message.text)
 
-
 # ------------------------------
 # Inicializar aplicación de Telegram
 # ------------------------------
@@ -43,7 +43,6 @@ def init_app():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     return application
-
 
 # ------------------------------
 # Configuración de AIOHTTP para Render
@@ -61,7 +60,6 @@ async def handle(request):
     return web.Response(status=405)
 
 app.router.add_post(WEBHOOK_PATH, handle)
-
 
 # ------------------------------
 # Webhook y ciclo de vida
