@@ -1,425 +1,107 @@
-import json
 import asyncio
 import logging
 import os
-
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-import database as db
-import shared_logic as shared
 import httpx
-
 from aiohttp import web
+from telegram.ext import Application, CommandHandler
 
+from db import init_db, get_db_pool
+from commands import start, help_command, set_threshold, set_min_pool
+from shared_logic import get_active_battles, get_live_battle_data_batched, check_battles_for_users
 
-# ------------------------------
-# LOGGING
-# ------------------------------
-
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# ------------------------------
-# CONFIG
-# ------------------------------
+battle_states = {}
 
-def load_config():
+async def battle_checker(app):
+    logger.info("Battle checker started")
 
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    pool = get_db_pool()
 
-    if not token:
-        try:
-            with open("config.json") as f:
-                data = json.load(f)
-                token = data.get("telegram_bot_token")
-        except Exception:
-            logger.error("TELEGRAM_BOT_TOKEN not found.")
-            return None
-
-    return {
-        "telegram_bot_token": token
-    }
-
-
-# ------------------------------
-# TELEGRAM COMMANDS
-# ------------------------------
-
-async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    chat_id = str(update.effective_chat.id)
-    pool = context.bot_data["db_pool"]
-
-    await db.update_user(pool, chat_id, "telegram", active=1)
-
-    user = await db.get_user(pool, chat_id, "telegram")
-
-    msg = (
-        f"👋 Welcome!\n"
-        f"Threshold={user['threshold']}\n"
-        f"Min Pool={user['min_pool']}"
-    )
-
-    await update.message.reply_text(msg)
-
-
-async def tg_set_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    chat_id = str(update.effective_chat.id)
-    pool = context.bot_data["db_pool"]
-
-    try:
-
-        val = float(context.args[0])
-
-        if 0 < val <= 2:
-
-            await db.update_user(pool, chat_id, "telegram", threshold=val)
-
-            await update.message.reply_text(
-                f"✅ Threshold updated to {val}"
-            )
-
-            await run_tg_immediate_check(chat_id, context)
-
-        else:
-
-            await update.message.reply_text(
-                "❌ Value must be between 0 and 2"
-            )
-
-    except Exception:
-
-        await update.message.reply_text(
-            "Usage: /threshold <value>"
-        )
-
-
-async def tg_set_minpool(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    chat_id = str(update.effective_chat.id)
-    pool = context.bot_data["db_pool"]
-
-    try:
-
-        val = float(context.args[0])
-
-        if 10 <= val <= 200:
-
-            await db.update_user(pool, chat_id, "telegram", min_pool=val)
-
-            await update.message.reply_text(
-                f"✅ Min Pool updated to {val}"
-            )
-
-            await run_tg_immediate_check(chat_id, context)
-
-        else:
-
-            await update.message.reply_text(
-                "❌ Value must be between 10 and 200"
-            )
-
-    except Exception:
-
-        await update.message.reply_text(
-            "Usage: /minpool <value>"
-        )
-
-
-async def tg_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    chat_id = str(update.effective_chat.id)
-    pool = context.bot_data["db_pool"]
-
-    user = await db.get_user(pool, chat_id, "telegram")
-
-    if user:
-
-        msg = (
-            f"📊 Settings\n"
-            f"Threshold={user['threshold']}\n"
-            f"Min Pool={user['min_pool']}\n"
-            f"Active={user['active']}"
-        )
-
-        await update.message.reply_text(msg)
-
-    else:
-
-        await update.message.reply_text(
-            "You are not registered. Use /start"
-        )
-
-
-async def tg_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    chat_id = str(update.effective_chat.id)
-    pool = context.bot_data["db_pool"]
-
-    await db.update_user(pool, chat_id, "telegram", active=0)
-
-    await update.message.reply_text(
-        "🚫 Notifications stopped"
-    )
-
-
-# ------------------------------
-# IMMEDIATE CHECK
-# ------------------------------
-
-async def run_tg_immediate_check(chat_id, context):
-
-    pool = context.bot_data["db_pool"]
-
-    user = await db.get_user(pool, chat_id, "telegram")
-
-    if not user or not user["active"]:
-        return
-
-    async with httpx.AsyncClient() as client:
-
-        battles = await shared.get_active_battles(client)
-
-        if not battles:
-            return
-
-        battle_ids = [b.get("_id") for b in battles if b.get("_id")]
-
-        states = await db.get_battle_states(pool, battle_ids)
-
-        batch_results = await shared.get_live_battle_data_batched(
-            client,
-            battle_ids[:10]
-        )
-
-        all_live_data = list(zip(battle_ids[:10], batch_results))
-
-        user_list = [{
-            "user_id": chat_id,
-            "platform": "telegram",
-            "threshold": user["threshold"],
-            "min_pool": user["min_pool"]
-        }]
-
-        notifications = shared.check_battles_for_users(
-            user_list,
-            all_live_data,
-            states
-        )
-
-        for n in notifications:
-
-            await context.bot.send_message(
-                chat_id=n["user_id"],
-                text=n["message"],
-                parse_mode="Markdown"
-            )
-
-            await db.update_battle_state(
-                pool,
-                n["user_id"],
-                n["platform"],
-                n["battle_id"],
-                n["side_name"],
-                n["ratio"],
-                n["pool"]
-            )
-
-
-# ------------------------------
-# BROADCAST
-# ------------------------------
-
-async def broadcast_notifications(app, notifications):
-
-    pool = app["db_pool"]
-    bot = app["tg_app"].bot
-
-    for n in notifications:
-
-        try:
-
-            await bot.send_message(
-                chat_id=n["user_id"],
-                text=n["message"],
-                parse_mode="Markdown"
-            )
-
-            await db.update_battle_state(
-                pool,
-                n["user_id"],
-                n["platform"],
-                n["battle_id"],
-                n["side_name"],
-                n["ratio"],
-                n["pool"]
-            )
-
-        except Exception as e:
-
-            logger.error(
-                f"Failed to send message to {n['user_id']}: {e}"
-            )
-
-
-# ------------------------------
-# BATTLE CHECKER LOOP
-# ------------------------------
-
-async def battle_checker_job(app):
-
-    pool = app["db_pool"]
-
-    async with httpx.AsyncClient(timeout=20) as client:
-
+    async with httpx.AsyncClient(timeout=30) as client:
         while True:
-
             try:
+                battles = await get_active_battles(client)
 
-                logger.info("Checking battles...")
+                if not battles:
+                    await asyncio.sleep(30)
+                    continue
 
-                battles = await shared.get_active_battles(client)
+                battle_ids = [b["id"] for b in battles]
 
-                if battles:
+                live_data = await get_live_battle_data_batched(client, battle_ids)
 
-                    battle_ids = [
-                        b.get("_id")
-                        for b in battles
-                        if b.get("_id")
-                    ]
+                battle_data = list(zip(battle_ids, live_data))
 
-                    await db.clear_old_battles(pool, battle_ids)
+                async with pool.acquire() as conn:
+                    users = await conn.fetch(
+                        "SELECT user_id, platform, threshold, min_pool FROM users"
+                    )
 
-                    users = await db.get_all_active_users(pool)
+                users = [dict(u) for u in users]
 
-                    states = await db.get_battle_states(pool, battle_ids)
-
-                    if users:
-
-                        batch_size = 10
-                        all_live_data = []
-
-                        for i in range(0, len(battle_ids), batch_size):
-
-                            batch_ids = battle_ids[i:i+batch_size]
-
-                            results = await shared.get_live_battle_data_batched(
-                                client,
-                                batch_ids
-                            )
-
-                            all_live_data.extend(
-                                zip(batch_ids, results)
-                            )
-
-                            await asyncio.sleep(0.2)
-
-                        notifications = shared.check_battles_for_users(
-                            users,
-                            all_live_data,
-                            states
-                        )
-
-                        await broadcast_notifications(
-                            app,
-                            notifications
-                        )
-
-            except Exception as e:
-
-                logger.error(
-                    f"Battle checker error: {e}"
+                notifications = check_battles_for_users(
+                    users,
+                    battle_data,
+                    battle_states
                 )
 
-            await asyncio.sleep(20)
+                for notif in notifications:
 
+                    await app["bot"].bot.send_message(
+                        chat_id=notif["user_id"],
+                        text=notif["message"],
+                        parse_mode="Markdown"
+                    )
 
-# ------------------------------
-# HEALTH CHECK (RENDER)
-# ------------------------------
+                    state_key = (
+                        notif["user_id"],
+                        notif["platform"],
+                        notif["battle_id"],
+                        notif["side_name"]
+                    )
 
-async def health(request):
+                    battle_states[state_key] = {
+                        "money_per_1k": notif["ratio"],
+                        "money_pool": notif["pool"]
+                    }
 
-    return web.Response(text="OK")
+                await asyncio.sleep(30)
 
-
-# ------------------------------
-# STARTUP
-# ------------------------------
+            except Exception as e:
+                logger.error(f"Battle checker error: {e}")
+                await asyncio.sleep(30)
 
 async def start_background_tasks(app):
-
-    config = load_config()
-
-    if not config:
-        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
-
-    pool = await db.get_pool()
-
-    app["db_pool"] = pool
-
-    await db.init_db(pool)
-
-    token = config["telegram_bot_token"]
-
-    tg_app = ApplicationBuilder().token(token).build()
-
-    tg_app.bot_data["db_pool"] = pool
-
-    tg_app.add_handler(CommandHandler("start", tg_start))
-    tg_app.add_handler(CommandHandler("threshold", tg_set_threshold))
-    tg_app.add_handler(CommandHandler("minpool", tg_set_minpool))
-    tg_app.add_handler(CommandHandler("status", tg_status))
-    tg_app.add_handler(CommandHandler("stop", tg_stop))
-
-    await tg_app.initialize()
-    await tg_app.start()
-
-    app["tg_app"] = tg_app
-
-    app["battle_checker"] = asyncio.create_task(
-        battle_checker_job(app)
-    )
-
-
-# ------------------------------
-# CLEANUP
-# ------------------------------
+    app["battle_checker"] = asyncio.create_task(battle_checker(app))
 
 async def cleanup_background_tasks(app):
+    app["battle_checker"].cancel()
+    await app["battle_checker"]
 
-    if "battle_checker" in app:
-
-        app["battle_checker"].cancel()
-
-        try:
-            await app["battle_checker"]
-        except asyncio.CancelledError:
-            pass
-
-    if "tg_app" in app:
-
-        await app["tg_app"].stop()
-
-    if "db_pool" in app:
-
-        await app["db_pool"].close()
-
-
-# ------------------------------
-# APP INIT (IMPORTANTE PARA GUNICORN)
-# ------------------------------
+async def health(request):
+    return web.Response(text="OK")
 
 async def init_app():
 
+    await init_db()
+
+    telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CommandHandler("help", help_command))
+    telegram_app.add_handler(CommandHandler("set_threshold", set_threshold))
+    telegram_app.add_handler(CommandHandler("set_min_pool", set_min_pool))
+
+    await telegram_app.initialize()
+    await telegram_app.start()
+
     app = web.Application()
+
+    app["bot"] = telegram_app
 
     app.router.add_get("/health", health)
 
