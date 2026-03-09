@@ -42,7 +42,6 @@ async def init_db():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     try:
         async with pool.acquire() as conn:
             await conn.execute(
@@ -53,7 +52,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 """,
                 user_id
             )
-
         await update.message.reply_text(
             "🤖 Bot activado\n\n"
             "Comandos:\n"
@@ -66,26 +64,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error en /start: {e}")
         await update.message.reply_text("⚠ Ocurrió un error al registrarte.")
 
-
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     try:
         async with pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM users WHERE user_id=$1::BIGINT",
                 user_id
             )
-
         await update.message.reply_text("⛔ Alertas desactivadas")
     except Exception as e:
         logger.error(f"Error en /stop: {e}")
         await update.message.reply_text("⚠ Ocurrió un error al desactivar alertas.")
 
-
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -96,11 +89,9 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 """,
                 user_id
             )
-
         if not row:
             await update.message.reply_text("No estás registrado. Usa /start")
             return
-
         await update.message.reply_text(
             f"📊 Estado del Bot\n\n"
             f"Threshold: {row['threshold']}\n"
@@ -110,50 +101,41 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error en /status: {e}")
         await update.message.reply_text("⚠ Ocurrió un error al obtener tu estado.")
 
-
 async def threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Uso: /threshold 1")
         return
-
     try:
         value = float(context.args[0])
         user_id = update.effective_user.id
-
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE users SET threshold=$1 WHERE user_id=$2::BIGINT",
                 value,
                 user_id
             )
-
         await update.message.reply_text(f"Threshold actualizado a {value}")
     except Exception as e:
         logger.error(f"Error en /threshold: {e}")
         await update.message.reply_text("⚠ Ocurrió un error al actualizar el threshold.")
 
-
 async def min_pool(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Uso: /min_pool 0")
         return
-
     try:
         value = float(context.args[0])
         user_id = update.effective_user.id
-
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE users SET min_pool=$1 WHERE user_id=$2::BIGINT",
                 value,
                 user_id
             )
-
         await update.message.reply_text(f"Min pool actualizado a {value}")
     except Exception as e:
         logger.error(f"Error en /min_pool: {e}")
         await update.message.reply_text("⚠ Ocurrió un error al actualizar min pool.")
-
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -192,7 +174,6 @@ def extract_battles(data):
 
 async def battle_checker(application):
     logger.info("Battle watcher started")
-
     async with httpx.AsyncClient(timeout=20) as client:
         while True:
             try:
@@ -246,7 +227,6 @@ async def battle_checker(application):
                             logger.error(f"Telegram error: {e}")
             except Exception as e:
                 logger.error(f"Battle checker error: {e}")
-
             await asyncio.sleep(POLL_INTERVAL)
 
 # -------------------------
@@ -255,7 +235,6 @@ async def battle_checker(application):
 
 async def start_services(app):
     await init_db()
-
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Handlers
@@ -293,4 +272,5 @@ async def init_app():
     app.on_cleanup.append(stop_services)
     return app
 
-app = asyncio.run(init_app())
+# Exportamos la factory para Gunicorn
+app = init_app
