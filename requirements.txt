@@ -1,6 +1,5 @@
-python-telegram-bot[job-queue]
-discord.py
+python-telegram-bot==20.7
 asyncpg
+aiohttp
 httpx
 gunicorn
-aiohttp
