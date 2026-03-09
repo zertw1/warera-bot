@@ -15,9 +15,9 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 seen_battles = set()
 
-# ------------------------
-# TELEGRAM COMMANDS
-# ------------------------
+# -------------------------
+# COMMANDS
+# -------------------------
 
 async def start(update, context):
 
@@ -27,45 +27,88 @@ async def start(update, context):
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO users (user_id)
-            VALUES ($1)
-            ON CONFLICT (user_id) DO NOTHING
+            INSERT INTO users (user_id, alerts_enabled)
+            VALUES ($1, TRUE)
+            ON CONFLICT (user_id)
+            DO UPDATE SET alerts_enabled = TRUE
             """,
             user_id
         )
 
     await update.message.reply_text(
-        "Bot activo.\n\n"
-        "Comandos:\n"
+        "Bot activado ✅\n\n"
+        "Comandos disponibles:\n"
         "/threshold <valor>\n"
         "/min_pool <valor>\n"
-        "/help"
+        "/status\n"
+        "/stop"
     )
 
 
-async def help_cmd(update, context):
+async def stop(update, context):
 
-    await update.message.reply_text(
-        "Comandos disponibles:\n\n"
-        "/threshold 1.5\n"
-        "/min_pool 200\n"
+    user_id = update.effective_user.id
+    pool = get_db_pool()
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE users
+            SET alerts_enabled = FALSE
+            WHERE user_id = $1
+            """,
+            user_id
+        )
+
+    await update.message.reply_text("Alertas desactivadas ⛔")
+
+
+async def status(update, context):
+
+    user_id = update.effective_user.id
+    pool = get_db_pool()
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT threshold, min_pool, alerts_enabled
+            FROM users
+            WHERE user_id = $1
+            """,
+            user_id
+        )
+
+    if not row:
+        await update.message.reply_text("No estás registrado. Usa /start")
+        return
+
+    text = (
+        "📊 Bot Status\n\n"
+        f"Alerts: {'ON' if row['alerts_enabled'] else 'OFF'}\n"
+        f"Threshold: {row['threshold']}\n"
+        f"Min Pool: {row['min_pool']}"
     )
+
+    await update.message.reply_text(text)
 
 
 async def threshold(update, context):
 
     if not context.args:
-        await update.message.reply_text("Uso: /threshold 1.5")
+        await update.message.reply_text("Uso: /threshold 2")
         return
 
     value = float(context.args[0])
-
-    pool = get_db_pool()
     user_id = update.effective_user.id
+    pool = get_db_pool()
 
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE users SET threshold=$1 WHERE user_id=$2",
+            """
+            UPDATE users
+            SET threshold = $1
+            WHERE user_id = $2
+            """,
             value,
             user_id
         )
@@ -80,13 +123,16 @@ async def min_pool(update, context):
         return
 
     value = float(context.args[0])
-
-    pool = get_db_pool()
     user_id = update.effective_user.id
+    pool = get_db_pool()
 
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE users SET min_pool=$1 WHERE user_id=$2",
+            """
+            UPDATE users
+            SET min_pool = $1
+            WHERE user_id = $2
+            """,
             value,
             user_id
         )
@@ -94,17 +140,29 @@ async def min_pool(update, context):
     await update.message.reply_text(f"Min pool actualizado a {value}")
 
 
-# ------------------------
+async def help_cmd(update, context):
+
+    await update.message.reply_text(
+        "Comandos disponibles:\n\n"
+        "/start\n"
+        "/stop\n"
+        "/status\n"
+        "/threshold 2\n"
+        "/min_pool 300"
+    )
+
+
+# -------------------------
 # HEALTHCHECK
-# ------------------------
+# -------------------------
 
 async def health(request):
     return web.Response(text="OK")
 
 
-# ------------------------
-# EXTRAER BATTLES
-# ------------------------
+# -------------------------
+# BATTLE PARSER
+# -------------------------
 
 def extract_battles(data):
 
@@ -120,15 +178,13 @@ def extract_battles(data):
     return []
 
 
-# ------------------------
+# -------------------------
 # BATTLE CHECKER
-# ------------------------
+# -------------------------
 
-async def battle_checker(app):
+async def battle_checker(application):
 
     logger.info("Battle checker started")
-
-    telegram_app = app["telegram_app"]
 
     async with httpx.AsyncClient(timeout=20) as client:
 
@@ -142,7 +198,6 @@ async def battle_checker(app):
                 )
 
                 data = r.json()
-
                 battles = extract_battles(data)
 
                 if not battles:
@@ -153,15 +208,16 @@ async def battle_checker(app):
 
                 async with pool.acquire() as conn:
                     users = await conn.fetch(
-                        "SELECT user_id, threshold, min_pool FROM users"
+                        """
+                        SELECT user_id, threshold, min_pool
+                        FROM users
+                        WHERE alerts_enabled = TRUE
+                        """
                     )
 
                 for battle in battles:
 
-                    battle_id = (
-                        battle.get("battleId")
-                        or battle.get("id")
-                    )
+                    battle_id = battle.get("battleId") or battle.get("id")
 
                     if not battle_id:
                         continue
@@ -172,15 +228,15 @@ async def battle_checker(app):
                     seen_battles.add(battle_id)
 
                     pool_size = float(battle.get("pool", 0))
-                    threshold_value = float(battle.get("multiplier", 0))
+                    multiplier = float(battle.get("multiplier", 0))
 
                     logger.info(
-                        f"New battle {battle_id} pool={pool_size} threshold={threshold_value}"
+                        f"Battle {battle_id} pool={pool_size} mult={multiplier}"
                     )
 
                     for user in users:
 
-                        if threshold_value < user["threshold"]:
+                        if multiplier < user["threshold"]:
                             continue
 
                         if pool_size < user["min_pool"]:
@@ -188,19 +244,18 @@ async def battle_checker(app):
 
                         try:
 
-                            await telegram_app.bot.send_message(
+                            await application.bot.send_message(
                                 chat_id=user["user_id"],
                                 text=(
-                                    f"⚔️ Nueva Battle detectada\n\n"
+                                    f"⚔️ Nueva Battle\n\n"
                                     f"ID: {battle_id}\n"
                                     f"Pool: {pool_size}\n"
-                                    f"Multiplier: {threshold_value}"
+                                    f"Multiplier: {multiplier}"
                                 )
                             )
 
                         except Exception as e:
-
-                            logger.error(f"Telegram send error: {e}")
+                            logger.error(f"Telegram error: {e}")
 
             except Exception as e:
 
@@ -209,75 +264,55 @@ async def battle_checker(app):
             await asyncio.sleep(30)
 
 
-# ------------------------
-# BACKGROUND TASKS
-# ------------------------
+# -------------------------
+# APP START
+# -------------------------
 
-async def start_background_tasks(app):
+async def start_services(app):
 
-    app["battle_checker"] = asyncio.create_task(
-        battle_checker(app)
-    )
-
-
-async def cleanup_background_tasks(app):
-
-    task = app["battle_checker"]
-    task.cancel()
-
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-
-
-# ------------------------
-# TELEGRAM START
-# ------------------------
-
-async def start_bot(app):
+    await init_db()
 
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("stop", stop))
+    application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("threshold", threshold))
     application.add_handler(CommandHandler("min_pool", min_pool))
+    application.add_handler(CommandHandler("help", help_cmd))
 
     await application.initialize()
 
+    # importante para evitar Conflict
     await application.bot.delete_webhook()
 
     await application.start()
 
-    await application.updater.start_polling()
+    asyncio.create_task(application.updater.start_polling())
 
-    app["telegram_app"] = application
+    asyncio.create_task(battle_checker(application))
 
-
-async def stop_bot(app):
-
-    await app["telegram_app"].stop()
+    app["bot"] = application
 
 
-# ------------------------
+async def stop_services(app):
+
+    await app["bot"].stop()
+
+
+# -------------------------
 # APP FACTORY
-# ------------------------
+# -------------------------
 
 async def init_app():
-
-    await init_db()
 
     app = web.Application()
 
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
 
-    app.on_startup.append(start_bot)
-    app.on_startup.append(start_background_tasks)
-
-    app.on_cleanup.append(cleanup_background_tasks)
-    app.on_cleanup.append(stop_bot)
+    app.on_startup.append(start_services)
+    app.on_cleanup.append(stop_services)
 
     return app
 
