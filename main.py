@@ -414,10 +414,10 @@ async def cleanup_background_tasks(app):
 
 
 # ------------------------------
-# APP INIT
+# APP INIT (IMPORTANTE PARA GUNICORN)
 # ------------------------------
 
-def init_app():
+async def init_app():
 
     app = web.Application()
 
