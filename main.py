@@ -14,8 +14,6 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 pool = None
-
-# memoria para detectar cambios de bounty
 battle_bounties = {}
 
 POLL_INTERVAL = 3
@@ -37,19 +35,9 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
             threshold FLOAT DEFAULT 1,
-            min_pool FLOAT DEFAULT 0,
-            alerts_enabled BOOLEAN DEFAULT TRUE
+            min_pool FLOAT DEFAULT 0
         )
         """)
-
-        await conn.execute("""
-        ALTER TABLE users
-        ADD COLUMN IF NOT EXISTS alerts_enabled BOOLEAN DEFAULT TRUE
-        """)
-
-
-def get_db_pool():
-    return pool
 
 
 # -------------------------
@@ -61,12 +49,12 @@ async def start(update, context):
     user_id = update.effective_user.id
 
     async with pool.acquire() as conn:
+
         await conn.execute(
             """
-            INSERT INTO users (user_id, alerts_enabled)
-            VALUES ($1, TRUE)
-            ON CONFLICT (user_id)
-            DO UPDATE SET alerts_enabled = TRUE
+            INSERT INTO users (user_id)
+            VALUES ($1)
+            ON CONFLICT (user_id) DO NOTHING
             """,
             user_id
         )
@@ -86,8 +74,9 @@ async def stop(update, context):
     user_id = update.effective_user.id
 
     async with pool.acquire() as conn:
+
         await conn.execute(
-            "UPDATE users SET alerts_enabled = FALSE WHERE user_id=$1",
+            "DELETE FROM users WHERE user_id=$1",
             user_id
         )
 
@@ -99,9 +88,10 @@ async def status(update, context):
     user_id = update.effective_user.id
 
     async with pool.acquire() as conn:
+
         row = await conn.fetchrow(
             """
-            SELECT threshold, min_pool, alerts_enabled
+            SELECT threshold, min_pool
             FROM users
             WHERE user_id=$1
             """,
@@ -109,12 +99,12 @@ async def status(update, context):
         )
 
     if not row:
+
         await update.message.reply_text("No estás registrado. Usa /start")
         return
 
     await update.message.reply_text(
         f"📊 Estado del Bot\n\n"
-        f"Alerts: {'ON' if row['alerts_enabled'] else 'OFF'}\n"
         f"Threshold: {row['threshold']}\n"
         f"Min Pool: {row['min_pool']}"
     )
@@ -130,6 +120,7 @@ async def threshold(update, context):
     user_id = update.effective_user.id
 
     async with pool.acquire() as conn:
+
         await conn.execute(
             "UPDATE users SET threshold=$1 WHERE user_id=$2",
             value,
@@ -149,6 +140,7 @@ async def min_pool(update, context):
     user_id = update.effective_user.id
 
     async with pool.acquire() as conn:
+
         await conn.execute(
             "UPDATE users SET min_pool=$1 WHERE user_id=$2",
             value,
@@ -171,7 +163,7 @@ async def help_cmd(update, context):
 
 
 # -------------------------
-# HEALTHCHECK (Render)
+# HEALTHCHECK
 # -------------------------
 
 async def health(request):
@@ -188,8 +180,11 @@ def extract_battles(data):
         return data
 
     if isinstance(data, dict):
+
         for value in data.values():
+
             result = extract_battles(value)
+
             if result:
                 return result
 
@@ -224,12 +219,9 @@ async def battle_checker(application):
                     continue
 
                 async with pool.acquire() as conn:
+
                     users = await conn.fetch(
-                        """
-                        SELECT user_id, threshold, min_pool
-                        FROM users
-                        WHERE alerts_enabled = TRUE
-                        """
+                        "SELECT user_id, threshold, min_pool FROM users"
                     )
 
                 for battle in battles:
@@ -302,15 +294,12 @@ async def start_services(app):
 
     await application.initialize()
 
-    # elimina webhook para evitar conflict
     await application.bot.delete_webhook()
 
     await application.start()
 
-    # polling moderno (evita conflict)
-    asyncio.create_task(application.run_polling())
+    asyncio.create_task(application.updater.start_polling())
 
-    # watcher de battles
     asyncio.create_task(battle_checker(application))
 
     app["bot"] = application
