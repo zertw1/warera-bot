@@ -2,21 +2,54 @@ import os
 import asyncio
 import logging
 import httpx
+import asyncpg
 
 from aiohttp import web
 from telegram.ext import Application, CommandHandler
-
-from database import init_db, get_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# memoria para evitar alertas repetidas
+pool = None
+
+# memoria para detectar cambios de bounty
 battle_bounties = {}
 
 POLL_INTERVAL = 3
+
+
+# -------------------------
+# DATABASE
+# -------------------------
+
+async def init_db():
+
+    global pool
+
+    pool = await asyncpg.create_pool(DATABASE_URL)
+
+    async with pool.acquire() as conn:
+
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            threshold FLOAT DEFAULT 1,
+            min_pool FLOAT DEFAULT 0,
+            alerts_enabled BOOLEAN DEFAULT TRUE
+        )
+        """)
+
+        await conn.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS alerts_enabled BOOLEAN DEFAULT TRUE
+        """)
+
+
+def get_db_pool():
+    return pool
 
 
 # -------------------------
@@ -26,7 +59,6 @@ POLL_INTERVAL = 3
 async def start(update, context):
 
     user_id = update.effective_user.id
-    pool = get_db_pool()
 
     async with pool.acquire() as conn:
         await conn.execute(
@@ -52,7 +84,6 @@ async def start(update, context):
 async def stop(update, context):
 
     user_id = update.effective_user.id
-    pool = get_db_pool()
 
     async with pool.acquire() as conn:
         await conn.execute(
@@ -66,7 +97,6 @@ async def stop(update, context):
 async def status(update, context):
 
     user_id = update.effective_user.id
-    pool = get_db_pool()
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -98,7 +128,6 @@ async def threshold(update, context):
 
     value = float(context.args[0])
     user_id = update.effective_user.id
-    pool = get_db_pool()
 
     async with pool.acquire() as conn:
         await conn.execute(
@@ -118,7 +147,6 @@ async def min_pool(update, context):
 
     value = float(context.args[0])
     user_id = update.effective_user.id
-    pool = get_db_pool()
 
     async with pool.acquire() as conn:
         await conn.execute(
@@ -143,7 +171,7 @@ async def help_cmd(update, context):
 
 
 # -------------------------
-# HEALTHCHECK
+# HEALTHCHECK (Render)
 # -------------------------
 
 async def health(request):
@@ -188,13 +216,12 @@ async def battle_checker(application):
                 )
 
                 data = r.json()
+
                 battles = extract_battles(data)
 
                 if not battles:
                     await asyncio.sleep(POLL_INTERVAL)
                     continue
-
-                pool = get_db_pool()
 
                 async with pool.acquire() as conn:
                     users = await conn.fetch(
@@ -219,7 +246,6 @@ async def battle_checker(application):
 
                     battle_bounties[battle_id] = bounty
 
-                    # solo alertar si bounty sube
                     if bounty <= previous_bounty:
                         continue
 
@@ -231,7 +257,6 @@ async def battle_checker(application):
                         if pool_size < user["min_pool"]:
                             continue
 
-                        # solo alertar cuando cruza threshold
                         if previous_bounty >= user["threshold"]:
                             continue
 
@@ -277,12 +302,15 @@ async def start_services(app):
 
     await application.initialize()
 
+    # elimina webhook para evitar conflict
     await application.bot.delete_webhook()
 
     await application.start()
 
-    asyncio.create_task(application.updater.start_polling())
+    # polling moderno (evita conflict)
+    asyncio.create_task(application.run_polling())
 
+    # watcher de battles
     asyncio.create_task(battle_checker(application))
 
     app["bot"] = application
