@@ -27,7 +27,6 @@ async def start(update, context):
     pool = get_db_pool()
 
     async with pool.acquire() as conn:
-
         await conn.execute(
             """
             INSERT INTO users (user_id)
@@ -67,7 +66,6 @@ async def threshold(update, context):
     pool = get_db_pool()
 
     async with pool.acquire() as conn:
-
         await conn.execute(
             """
             UPDATE users
@@ -93,7 +91,6 @@ async def min_pool(update, context):
     pool = get_db_pool()
 
     async with pool.acquire() as conn:
-
         await conn.execute(
             """
             UPDATE users
@@ -119,6 +116,29 @@ async def health(request):
 # Battle checker
 # -----------------------
 
+def extract_battles(data):
+    """
+    Extrae battles sin asumir estructura del JSON.
+    """
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+
+        # buscar recursivamente listas
+        for value in data.values():
+
+            if isinstance(value, list):
+                return value
+
+            if isinstance(value, dict):
+                result = extract_battles(value)
+                if result:
+                    return result
+
+    return []
+
+
 async def battle_checker(app):
 
     logger.info("Battle checker started")
@@ -136,31 +156,24 @@ async def battle_checker(app):
 
                 data = response.json()
 
-                logger.info(f"WarEra response: {data}")
-
-                battles = []
-
-                if "result" in data:
-                    result = data["result"]
-
-                    if "data" in result and "json" in result["data"]:
-                        battles = result["data"]["json"]
-
-                    elif "data" in result:
-                        battles = result["data"]
+                battles = extract_battles(data)
 
                 battle_ids = []
 
                 for b in battles:
+
                     if isinstance(b, dict):
+
                         if "battleId" in b:
                             battle_ids.append(b["battleId"])
+
                         elif "id" in b:
                             battle_ids.append(b["id"])
 
                 logger.info(f"Active battles: {battle_ids}")
 
             except Exception as e:
+
                 logger.error(f"Battle checker error: {e}")
 
             await asyncio.sleep(30)
