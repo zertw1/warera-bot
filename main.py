@@ -1,80 +1,98 @@
 # main.py
 import os
-import logging
 import asyncio
 from aiohttp import web
-
+import httpx
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Application
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# -----------------------
+# Configuración
+# -----------------------
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+WEBHOOK_URL = "https://merc-tool-bot-up4g.onrender.com/"  # tu dominio en Render
 
-# ------------------------------
-# Configuración desde variables de entorno
-# ------------------------------
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-WEBHOOK_DOMAIN = "https://merc-tool-bot-up4g.onrender.com"
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = WEBHOOK_DOMAIN + WEBHOOK_PATH
-
-# ------------------------------
+# -----------------------
 # Handlers
-# ------------------------------
+# -----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot activo!")
+    await update.message.reply_text("¡Hola! Bot corriendo correctamente.")
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(update.message.text)
+# -----------------------
+# Funciones de servicios
+# -----------------------
+async def battle_checker():
+    # Ejemplo de loop periódico
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                # Aquí tu lógica de battle_checker
+                # await client.get("https://alguna_api.com")
+                await asyncio.sleep(60)  # cada 1 minuto
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print("Error battle_checker:", e)
+            await asyncio.sleep(5)
 
-# ------------------------------
-# Inicializar aplicación de Telegram
-# ------------------------------
-def init_app():
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+# -----------------------
+# Inicialización de aplicación
+# -----------------------
+async def init_bot():
+    application: Application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .build()
+    )
+
+    # Registrar handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+
+    # Iniciar battle_checker en segundo plano
+    application.job_queue.create_task(battle_checker())
+
+    # Configurar webhook
+    await application.bot.set_webhook(WEBHOOK_URL)
+
     return application
 
-# ------------------------------
-# Configuración de AIOHTTP para Render
-# ------------------------------
+# -----------------------
+# Aiohttp app
+# -----------------------
 app = web.Application()
-telegram_app = init_app()
 
-async def handle(request):
-    """Recibir POST de Telegram"""
-    if request.method == "POST":
-        data = await request.json()
-        update = Update.de_json(data, telegram_app.bot)
-        await telegram_app.update_queue.put(update)
-        return web.Response(text="OK")
-    return web.Response(status=405)
+# Guardamos la aplicación de Telegram en el app de aiohttp
+app["telegram_app"] = None
 
-app.router.add_post(WEBHOOK_PATH, handle)
+async def on_startup(app: web.Application):
+    app["telegram_app"] = await init_bot()
+    print("Bot iniciado y webhook configurado.")
 
-# ------------------------------
-# Webhook y ciclo de vida
-# ------------------------------
-async def on_startup(app):
-    try:
-        await telegram_app.bot.set_webhook(WEBHOOK_URL)
-        logger.info(f"Webhook configurado: {WEBHOOK_URL}")
-        asyncio.create_task(telegram_app.start())
-    except Exception as e:
-        logger.error(f"Error al configurar webhook: {e}")
+async def on_cleanup(app: web.Application):
+    if app.get("telegram_app"):
+        await app["telegram_app"].stop()
+        print("Bot detenido correctamente.")
 
-async def on_cleanup(app):
-    await telegram_app.stop()
-    logger.info("Bot detenido")
-
+# Conectar los eventos
 app.on_startup.append(on_startup)
 app.on_cleanup.append(on_cleanup)
+
+# Endpoint que recibe actualizaciones de Telegram
+async def telegram_webhook(request):
+    telegram_app: Application = request.app["telegram_app"]
+    if not telegram_app:
+        return web.Response(status=503)
+
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.update_queue.put(update)
+    return web.Response(status=200)
+
+# Ruta principal del webhook
+app.router.add_post("/", telegram_webhook)
+
+# -----------------------
+# Para correr localmente (opcional)
+# -----------------------
+if __name__ == "__main__":
+    web.run_app(app, port=int(os.environ.get("PORT", 8080)))
