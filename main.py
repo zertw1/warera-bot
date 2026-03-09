@@ -6,12 +6,11 @@ import httpx
 from aiohttp import web
 from telegram.ext import Application, CommandHandler
 
-from database import init_db
+from database import init_db, get_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Leer token desde Render environment
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 if not BOT_TOKEN:
@@ -23,18 +22,93 @@ if not BOT_TOKEN:
 # -----------------------
 
 async def start(update, context):
-    await update.message.reply_text("✅ Bot is running")
 
-async def help_cmd(update, context):
+    user_id = update.effective_user.id
+    pool = get_db_pool()
+
+    async with pool.acquire() as conn:
+
+        await conn.execute(
+            """
+            INSERT INTO users (user_id)
+            VALUES ($1)
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            user_id
+        )
+
     await update.message.reply_text(
+        "✅ You are registered!\n\n"
         "Commands:\n"
-        "/start\n"
+        "/threshold <value>\n"
+        "/min_pool <value>\n"
         "/help"
     )
 
 
+async def help_cmd(update, context):
+
+    await update.message.reply_text(
+        "Commands:\n"
+        "/threshold <value>\n"
+        "/min_pool <value>\n"
+    )
+
+
+async def threshold(update, context):
+
+    if not context.args:
+        await update.message.reply_text("Usage: /threshold <value>")
+        return
+
+    value = float(context.args[0])
+
+    user_id = update.effective_user.id
+    pool = get_db_pool()
+
+    async with pool.acquire() as conn:
+
+        await conn.execute(
+            """
+            UPDATE users
+            SET threshold=$1
+            WHERE user_id=$2
+            """,
+            value,
+            user_id
+        )
+
+    await update.message.reply_text(f"✅ Threshold set to {value}")
+
+
+async def min_pool(update, context):
+
+    if not context.args:
+        await update.message.reply_text("Usage: /min_pool <value>")
+        return
+
+    value = float(context.args[0])
+
+    user_id = update.effective_user.id
+    pool = get_db_pool()
+
+    async with pool.acquire() as conn:
+
+        await conn.execute(
+            """
+            UPDATE users
+            SET min_pool=$1
+            WHERE user_id=$2
+            """,
+            value,
+            user_id
+        )
+
+    await update.message.reply_text(f"✅ Min pool set to {value}")
+
+
 # -----------------------
-# Health route (Render)
+# Health endpoint
 # -----------------------
 
 async def health(request):
@@ -62,11 +136,27 @@ async def battle_checker(app):
 
                 data = response.json()
 
-                battles = data["result"]["data"]["json"]
+                logger.info(f"WarEra response: {data}")
 
-                battle_ids = [
-                    b.get("battleId") for b in battles if b.get("battleId")
-                ]
+                battles = []
+
+                if "result" in data:
+                    result = data["result"]
+
+                    if "data" in result and "json" in result["data"]:
+                        battles = result["data"]["json"]
+
+                    elif "data" in result:
+                        battles = result["data"]
+
+                battle_ids = []
+
+                for b in battles:
+                    if isinstance(b, dict):
+                        if "battleId" in b:
+                            battle_ids.append(b["battleId"])
+                        elif "id" in b:
+                            battle_ids.append(b["id"])
 
                 logger.info(f"Active battles: {battle_ids}")
 
@@ -103,10 +193,11 @@ async def start_bot(app):
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("threshold", threshold))
+    application.add_handler(CommandHandler("min_pool", min_pool))
 
     await application.initialize()
 
-    # limpiar webhook por si quedó configurado
     await application.bot.delete_webhook()
 
     await application.start()
@@ -144,7 +235,7 @@ async def init_app():
 
 
 # -----------------------
-# Run app (Render)
+# Run app
 # -----------------------
 
 app = init_app()
