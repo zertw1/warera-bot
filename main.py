@@ -6,22 +6,24 @@ import asyncpg
 
 from aiohttp import web
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-DATABASE_URL = os.environ.get("DATABASE_URL")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Ej: https://<tu-dominio>/webhook/<bot_token>
+BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+DATABASE_URL = os.environ["DATABASE_URL"]
+WEBHOOK_URL = os.environ["WEBHOOK_URL"]
 
 pool = None
 battle_bounties = {}
 POLL_INTERVAL = 3
 
+
 # -------------------------
 # DATABASE
 # -------------------------
+
 async def init_db():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL)
@@ -34,117 +36,111 @@ async def init_db():
         )
         """)
 
+
 # -------------------------
-# TELEGRAM COMMANDS
+# COMMANDS
 # -------------------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO users (user_id) VALUES ($1::BIGINT) ON CONFLICT DO NOTHING",
-                user_id
-            )
-        await update.message.reply_text(
-            "🤖 Bot activado\n\n"
-            "Comandos:\n"
-            "/threshold <valor>\n"
-            "/min_pool <valor>\n"
-            "/status\n"
-            "/stop"
-        )
-    except Exception as e:
-        logger.error(f"/start error: {e}")
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users (user_id)
+            VALUES ($1)
+            ON CONFLICT (user_id) DO NOTHING
+        """, user_id)
+    await update.message.reply_text(
+        "🤖 Bot activado\n\n"
+        "Comandos:\n"
+        "/threshold <valor>\n"
+        "/min_pool <valor>\n"
+        "/status\n"
+        "/stop"
+    )
+
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM users WHERE user_id=$1::BIGINT", user_id)
-        await update.message.reply_text("⛔ Alertas desactivadas")
-    except Exception as e:
-        logger.error(f"/stop error: {e}")
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM users WHERE user_id=$1", user_id)
+    await update.message.reply_text("⛔ Alertas desactivadas")
+
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT threshold, min_pool FROM users WHERE user_id=$1::BIGINT", user_id
-            )
-        if not row:
-            await update.message.reply_text("No estás registrado. Usa /start")
-            return
-        await update.message.reply_text(
-            f"📊 Estado del Bot\nThreshold: {row['threshold']}\nMin Pool: {row['min_pool']}"
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT threshold, min_pool FROM users WHERE user_id=$1", user_id
         )
-    except Exception as e:
-        logger.error(f"/status error: {e}")
+    if not row:
+        await update.message.reply_text("No estás registrado. Usa /start")
+        return
+    await update.message.reply_text(
+        f"📊 Estado del Bot\n\nThreshold: {row['threshold']}\nMin Pool: {row['min_pool']}"
+    )
+
 
 async def threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Uso: /threshold <valor>")
+        await update.message.reply_text("Uso: /threshold 1")
         return
-    try:
-        value = float(context.args[0])
-        user_id = update.effective_user.id
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET threshold=$1 WHERE user_id=$2::BIGINT", value, user_id
-            )
-        await update.message.reply_text(f"Threshold actualizado a {value}")
-    except Exception as e:
-        logger.error(f"/threshold error: {e}")
+    value = float(context.args[0])
+    user_id = update.effective_user.id
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET threshold=$1 WHERE user_id=$2", value, user_id)
+    await update.message.reply_text(f"Threshold actualizado a {value}")
+
 
 async def min_pool(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Uso: /min_pool <valor>")
+        await update.message.reply_text("Uso: /min_pool 0")
         return
-    try:
-        value = float(context.args[0])
-        user_id = update.effective_user.id
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET min_pool=$1 WHERE user_id=$2::BIGINT", value, user_id
-            )
-        await update.message.reply_text(f"Min pool actualizado a {value}")
-    except Exception as e:
-        logger.error(f"/min_pool error: {e}")
+    value = float(context.args[0])
+    user_id = update.effective_user.id
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET min_pool=$1 WHERE user_id=$2", value, user_id)
+    await update.message.reply_text(f"Min pool actualizado a {value}")
+
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Comandos:\n/start\n/stop\n/status\n/threshold <valor>\n/min_pool <valor>"
+        "Comandos disponibles:\n\n"
+        "/start\n"
+        "/stop\n"
+        "/status\n"
+        "/threshold 1\n"
+        "/min_pool 0"
     )
+
 
 # -------------------------
 # HEALTHCHECK
 # -------------------------
+
 async def health(request):
     return web.Response(text="OK")
 
-# -------------------------
-# WEBHOOK HANDLER
-# -------------------------
-async def telegram_webhook(request):
-    data = await request.json()
-    update = Update.de_json(data, request.app["bot"])
-    await request.app["application"].update_queue.put(update)
-    return web.Response(text="OK")
 
 # -------------------------
-# BATTLE CHECKER
+# BATTLE PARSER
 # -------------------------
+
 def extract_battles(data):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for v in data.values():
-            result = extract_battles(v)
+        for value in data.values():
+            result = extract_battles(value)
             if result:
                 return result
     return []
 
-async def battle_checker(application: Application):
+
+# -------------------------
+# BATTLE CHECKER
+# -------------------------
+
+async def battle_checker(application):
     logger.info("Battle watcher started")
     async with httpx.AsyncClient(timeout=20) as client:
         while True:
@@ -153,7 +149,8 @@ async def battle_checker(application: Application):
                     "https://api2.warera.io/trpc/battle.getBattles",
                     params={"input": '{"isActive": true}'}
                 )
-                battles = extract_battles(r.json())
+                data = r.json()
+                battles = extract_battles(data)
                 if not battles:
                     await asyncio.sleep(POLL_INTERVAL)
                     continue
@@ -170,14 +167,16 @@ async def battle_checker(application: Application):
                     if bounty <= previous_bounty:
                         continue
                     for user in users:
-                        if bounty < user["threshold"] or pool_size < user["min_pool"]:
+                        if bounty < user["threshold"]:
+                            continue
+                        if pool_size < user["min_pool"]:
                             continue
                         if previous_bounty >= user["threshold"]:
                             continue
                         try:
                             await application.bot.send_message(
-                                chat_id=int(user["user_id"]),
-                                text=f"🎯 High Bounty Detectado\nBattle: {battle_id}\nBounty: {bounty}\nPool: {pool_size}"
+                                chat_id=user["user_id"],
+                                text=(f"🎯 High Bounty Detectado\n\nBattle: {battle_id}\nBounty: {bounty}\nPool: {pool_size}")
                             )
                         except Exception as e:
                             logger.error(f"Telegram error: {e}")
@@ -185,12 +184,27 @@ async def battle_checker(application: Application):
                 logger.error(f"Battle checker error: {e}")
             await asyncio.sleep(POLL_INTERVAL)
 
+
+# -------------------------
+# WEBHOOK HANDLER
+# -------------------------
+
+async def handle_webhook(request):
+    data = await request.json()
+    update = Update.de_json(data, request.app["bot"])
+    await request.app["application"].update_queue.put(update)
+    return web.Response(text="ok")
+
+
 # -------------------------
 # START SERVICES
 # -------------------------
-async def start_services(app: web.Application):
+
+async def start_services(app):
     await init_db()
     application = Application.builder().token(BOT_TOKEN).build()
+
+    # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("status", status))
@@ -198,29 +212,37 @@ async def start_services(app: web.Application):
     application.add_handler(CommandHandler("min_pool", min_pool))
     application.add_handler(CommandHandler("help", help_cmd))
 
+    # Webhook setup
     await application.initialize()
-    await application.bot.set_webhook(f"{WEBHOOK_URL}")
-    app["bot"] = application
+    await application.bot.delete_webhook()
+    await application.bot.set_webhook(WEBHOOK_URL)
+
+    # Save app references
+    app["bot"] = application.bot
     app["application"] = application
 
     # Start battle checker
     asyncio.create_task(battle_checker(application))
 
-async def stop_services(app: web.Application):
-    if "bot" in app:
-        await app["bot"].shutdown()
-        await app["bot"].stop()
+
+async def stop_services(app):
+    await app["application"].shutdown()
+    await app["application"].stop()
+    await app["application"].shutdown()
+
 
 # -------------------------
 # APP FACTORY
 # -------------------------
+
 async def init_app():
     app = web.Application()
+    app.router.add_post("/webhook", handle_webhook)
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
-    app.router.add_post(f"/webhook/{BOT_TOKEN}", telegram_webhook)
     app.on_startup.append(start_services)
     app.on_cleanup.append(stop_services)
     return app
 
-app = init_app
+
+app = init_app()
