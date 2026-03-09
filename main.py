@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-seen_battles = set()
+# memoria para evitar alertas repetidas
+battle_bounties = {}
+
+POLL_INTERVAL = 3
+
 
 # -------------------------
 # COMMANDS
@@ -36,8 +40,8 @@ async def start(update, context):
         )
 
     await update.message.reply_text(
-        "Bot activado ✅\n\n"
-        "Comandos disponibles:\n"
+        "🤖 Bot activado\n\n"
+        "Comandos:\n"
         "/threshold <valor>\n"
         "/min_pool <valor>\n"
         "/status\n"
@@ -52,15 +56,11 @@ async def stop(update, context):
 
     async with pool.acquire() as conn:
         await conn.execute(
-            """
-            UPDATE users
-            SET alerts_enabled = FALSE
-            WHERE user_id = $1
-            """,
+            "UPDATE users SET alerts_enabled = FALSE WHERE user_id=$1",
             user_id
         )
 
-    await update.message.reply_text("Alertas desactivadas ⛔")
+    await update.message.reply_text("⛔ Alertas desactivadas")
 
 
 async def status(update, context):
@@ -73,7 +73,7 @@ async def status(update, context):
             """
             SELECT threshold, min_pool, alerts_enabled
             FROM users
-            WHERE user_id = $1
+            WHERE user_id=$1
             """,
             user_id
         )
@@ -82,20 +82,18 @@ async def status(update, context):
         await update.message.reply_text("No estás registrado. Usa /start")
         return
 
-    text = (
-        "📊 Bot Status\n\n"
+    await update.message.reply_text(
+        f"📊 Estado del Bot\n\n"
         f"Alerts: {'ON' if row['alerts_enabled'] else 'OFF'}\n"
         f"Threshold: {row['threshold']}\n"
         f"Min Pool: {row['min_pool']}"
     )
 
-    await update.message.reply_text(text)
-
 
 async def threshold(update, context):
 
     if not context.args:
-        await update.message.reply_text("Uso: /threshold 2")
+        await update.message.reply_text("Uso: /threshold 1")
         return
 
     value = float(context.args[0])
@@ -104,11 +102,7 @@ async def threshold(update, context):
 
     async with pool.acquire() as conn:
         await conn.execute(
-            """
-            UPDATE users
-            SET threshold = $1
-            WHERE user_id = $2
-            """,
+            "UPDATE users SET threshold=$1 WHERE user_id=$2",
             value,
             user_id
         )
@@ -119,7 +113,7 @@ async def threshold(update, context):
 async def min_pool(update, context):
 
     if not context.args:
-        await update.message.reply_text("Uso: /min_pool 200")
+        await update.message.reply_text("Uso: /min_pool 0")
         return
 
     value = float(context.args[0])
@@ -128,11 +122,7 @@ async def min_pool(update, context):
 
     async with pool.acquire() as conn:
         await conn.execute(
-            """
-            UPDATE users
-            SET min_pool = $1
-            WHERE user_id = $2
-            """,
+            "UPDATE users SET min_pool=$1 WHERE user_id=$2",
             value,
             user_id
         )
@@ -147,8 +137,8 @@ async def help_cmd(update, context):
         "/start\n"
         "/stop\n"
         "/status\n"
-        "/threshold 2\n"
-        "/min_pool 300"
+        "/threshold 1\n"
+        "/min_pool 0"
     )
 
 
@@ -184,7 +174,7 @@ def extract_battles(data):
 
 async def battle_checker(application):
 
-    logger.info("Battle checker started")
+    logger.info("Battle watcher started")
 
     async with httpx.AsyncClient(timeout=20) as client:
 
@@ -201,7 +191,7 @@ async def battle_checker(application):
                 battles = extract_battles(data)
 
                 if not battles:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(POLL_INTERVAL)
                     continue
 
                 pool = get_db_pool()
@@ -222,24 +212,27 @@ async def battle_checker(application):
                     if not battle_id:
                         continue
 
-                    if battle_id in seen_battles:
-                        continue
-
-                    seen_battles.add(battle_id)
-
+                    bounty = float(battle.get("bounty", 0))
                     pool_size = float(battle.get("pool", 0))
-                    multiplier = float(battle.get("multiplier", 0))
 
-                    logger.info(
-                        f"Battle {battle_id} pool={pool_size} mult={multiplier}"
-                    )
+                    previous_bounty = battle_bounties.get(battle_id, 0)
+
+                    battle_bounties[battle_id] = bounty
+
+                    # solo alertar si bounty sube
+                    if bounty <= previous_bounty:
+                        continue
 
                     for user in users:
 
-                        if multiplier < user["threshold"]:
+                        if bounty < user["threshold"]:
                             continue
 
                         if pool_size < user["min_pool"]:
+                            continue
+
+                        # solo alertar cuando cruza threshold
+                        if previous_bounty >= user["threshold"]:
                             continue
 
                         try:
@@ -247,25 +240,26 @@ async def battle_checker(application):
                             await application.bot.send_message(
                                 chat_id=user["user_id"],
                                 text=(
-                                    f"⚔️ Nueva Battle\n\n"
-                                    f"ID: {battle_id}\n"
-                                    f"Pool: {pool_size}\n"
-                                    f"Multiplier: {multiplier}"
+                                    f"🎯 High Bounty Detectado\n\n"
+                                    f"Battle: {battle_id}\n"
+                                    f"Bounty: {bounty}\n"
+                                    f"Pool: {pool_size}"
                                 )
                             )
 
                         except Exception as e:
+
                             logger.error(f"Telegram error: {e}")
 
             except Exception as e:
 
                 logger.error(f"Battle checker error: {e}")
 
-            await asyncio.sleep(30)
+            await asyncio.sleep(POLL_INTERVAL)
 
 
 # -------------------------
-# APP START
+# START SERVICES
 # -------------------------
 
 async def start_services(app):
@@ -283,7 +277,6 @@ async def start_services(app):
 
     await application.initialize()
 
-    # importante para evitar Conflict
     await application.bot.delete_webhook()
 
     await application.start()
