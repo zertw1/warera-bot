@@ -5,7 +5,7 @@ import httpx
 from aiohttp import web
 from telegram.ext import Application, CommandHandler
 
-from db import init_db, get_db_pool
+from database import init_db, get_db_pool
 from commands import start, help_command, set_threshold, set_min_pool
 from shared_logic import get_active_battles, get_live_battle_data_batched, check_battles_for_users
 
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 battle_states = {}
+
 
 async def battle_checker(app):
     logger.info("Battle checker started")
@@ -75,15 +76,19 @@ async def battle_checker(app):
                 logger.error(f"Battle checker error: {e}")
                 await asyncio.sleep(30)
 
+
 async def start_background_tasks(app):
     app["battle_checker"] = asyncio.create_task(battle_checker(app))
+
 
 async def cleanup_background_tasks(app):
     app["battle_checker"].cancel()
     await app["battle_checker"]
 
+
 async def health(request):
     return web.Response(text="OK")
+
 
 async def init_app():
 
