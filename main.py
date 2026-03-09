@@ -5,15 +5,15 @@ import httpx
 import asyncpg
 
 from aiohttp import web
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes, TelegramObject
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # https://<tu-dominio>/webhook/<bot_token>
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Ej: https://<tu-dominio>/webhook/<bot_token>
 
 pool = None
 battle_bounties = {}
